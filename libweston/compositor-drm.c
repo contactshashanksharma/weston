@@ -131,6 +131,7 @@ enum wdrm_plane_property {
 	WDRM_PLANE_CRTC_H,
 	WDRM_PLANE_FB_ID,
 	WDRM_PLANE_CRTC_ID,
+	WDRM_PLANE_COLOR_ENCODING,
 	WDRM_PLANE__COUNT
 };
 
@@ -172,6 +173,7 @@ static const struct drm_property_info plane_props[] = {
 	[WDRM_PLANE_CRTC_H] = { .name = "CRTC_H", },
 	[WDRM_PLANE_FB_ID] = { .name = "FB_ID", },
 	[WDRM_PLANE_CRTC_ID] = { .name = "CRTC_ID", },
+	[WDRM_PLANE_COLOR_ENCODING] = { .name = "COLOR_ENCODING", },
 };
 
 /**
@@ -1806,6 +1808,8 @@ drm_output_apply_state_legacy(struct drm_output_state *state)
 	struct timespec now;
 	int ret = 0;
 
+	weston_log("Shashank: %s\n", __func__);
+
 	wl_list_for_each(head, &output->base.head_list, base.output_link) {
 		assert(n_conn < MAX_CLONED_CONNECTORS);
 		connectors[n_conn++] = head->connector_id;
@@ -1915,6 +1919,7 @@ drm_output_apply_state_legacy(struct drm_output_state *state)
 		};
 
 		p = ps->plane;
+
 		if (p->type != WDRM_PLANE_TYPE_OVERLAY)
 			continue;
 
@@ -2249,8 +2254,7 @@ drm_pending_state_apply_atomic(struct drm_pending_state *pending_state,
 		goto out;
 	}
 
-	wl_list_for_each_safe(output_state, tmp, &pending_state->output_list,
-			      link)
+	wl_list_for_each_safe(output_state, tmp, &pending_state->output_list, link)
 		drm_output_assign_state(output_state, mode);
 
 	b->state_invalid = false;
@@ -2657,6 +2661,104 @@ drm_output_check_plane_format(struct drm_plane *p,
 			return format;
 
 	return 0;
+}
+
+/*
+ * HDR10 Media Profile is defined as:
+ * Resolution: 4K
+ * EOTF: SMPTE ST 2084
+ * Color Sub-sampling: 4:2:0 (for compressed video sources)
+ * Bit Depth: 10 bit
+ * Color Primaries:  ITU-R BT.2020
+ * Metadata: SMPTE ST 2086, MaxFALL, MaxCLL
+ * Min Interface: HDMI 2.0a
+ * Static metadata: SMPTE ST2086
+ */
+
+int drm_output_prepare_plane_for_hdr(struct drm_output_state *output_state)
+{
+
+}
+
+void
+drm_output_prepare_plane_blending(struct drm_output_state *output_state)
+{
+	int count;
+	int p_val = 0;
+	struct drm_output *output = output_state->output;
+	struct weston_compositor *comp = output->base.compositor;
+	struct drm_backend *b = to_drm_backend(comp);
+	struct drm_plane *plane;
+	struct drm_fb *fb;
+	const struct pixel_format_info *format;
+	struct drm_property_info *prop;
+	struct drm_plane_state *state = NULL;
+
+	weston_log("\n######################## Planes ##############################\n");
+	wl_list_for_each(plane, &b->plane_list, link) {
+		weston_log_continue("\n");
+		weston_log_continue("============== Shashank: Plane %d info ================\n", plane->plane_id);
+		weston_log_continue("Plane type: %s\n", plane_type_enums[plane->type].name);
+
+		if (plane->type == WDRM_PLANE_TYPE_CURSOR) {
+			weston_log_continue("======================================================\n");
+			continue;
+		}
+
+		weston_log_continue("supported formats:\n");
+		for (count = 0; count < plane->count_formats; count++)
+			weston_log_continue("0x%x\n", plane->formats[count]);
+
+		state = plane->state_cur;
+		if (!state) {
+			weston_log_continue("======================================================\n");
+			continue;
+		}
+
+		weston_log_continue("\n========================\n");
+		weston_log_continue("Shashank: plane properties\n");
+		weston_log_continue("=========================\n");
+		for (count = 0; count < WDRM_PLANE__COUNT; count++) {
+			prop = &plane->props[count];
+			if (prop) {
+				weston_log_continue("'%s'\n", prop->name);
+				if (prop->num_enum_values) {
+					weston_log_continue("\t=====================\n");
+					weston_log_continue("\tprop '%s' values\n",
+								prop->name);
+					weston_log_continue("\t=====================\n");
+					for (p_val = 0; p_val < prop->num_enum_values; p_val++)
+						weston_log_continue("\tname=%s val=%ld\n",
+						prop->enum_values[p_val].name,
+						prop->enum_values[p_val].value);
+				}
+			}
+		}
+
+		fb = state->fb;
+		if (!fb) {
+			weston_log_continue("======================================================\n");
+			continue;
+		}
+
+		weston_log_continue("********************\n");
+		weston_log_continue("Shashank: fb details\n");
+		weston_log_continue("********************\n");
+		weston_log_continue("id=0x%x\nsize=%d\n", fb->fb_id, fb->size);
+
+		format = fb->format;
+		if (!format) {
+			weston_log_continue("======================================================\n");
+			continue;
+		}
+
+		weston_log_continue("gl_format=0x%x\ngl_type=0x%x\nsampler_type=0x%x\ndepth=%d\nbpp=%d\n",
+					format->gl_format, format->gl_type, format->sampler_type,
+					format->depth, format->bpp);
+		if (fb->format->colorspace == )
+		weston_log_continue("======================================================\n");
+	}
+	weston_log_continue("\n########################### End ##############################\n");
 }
 
 static struct weston_plane *
@@ -3120,6 +3222,8 @@ drm_assign_planes(struct weston_output *output_base, void *repaint_data)
 
 		if (next_plane == NULL)
 			next_plane = primary;
+
+		drm_output_prepare_plane_blending(state);
 
 		weston_view_move_to_plane(ev, next_plane);
 
