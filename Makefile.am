@@ -187,7 +187,7 @@ weston_LDFLAGS = -export-dynamic
 weston_CPPFLAGS = $(AM_CPPFLAGS) -DIN_WESTON 		\
 				 -DMODULEDIR='"$(moduledir)"' \
 				 -DXSERVER_PATH='"@XSERVER_PATH@"'
-weston_CFLAGS = $(AM_CFLAGS) $(COMPOSITOR_CFLAGS) $(LIBINPUT_BACKEND_CFLAGS)
+weston_CFLAGS = $(AM_CFLAGS) $(COMPOSITOR_CFLAGS) $(LIBINPUT_BACKEND_CFLAGS) -linput
 weston_LDADD = libshared.la libweston-@LIBWESTON_MAJOR@.la \
 	$(COMPOSITOR_LIBS) \
 	$(DL_LIBS) $(LIBINPUT_BACKEND_LIBS) \
@@ -359,7 +359,6 @@ x11_backend_la_SOURCES = 			\
 	shared/helpers.h
 endif
 
-INPUT_BACKEND_CFLAGS = $(LIBINPUT_BACKEND_CFLAGS)
 INPUT_BACKEND_LIBS = $(LIBINPUT_BACKEND_LIBS)
 INPUT_BACKEND_SOURCES =				\
 	libweston/libinput-seat.c		\
