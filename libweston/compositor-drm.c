@@ -65,6 +65,7 @@
 #include "presentation-time-server-protocol.h"
 #include "linux-dmabuf.h"
 #include "linux-dmabuf-unstable-v1-server-protocol.h"
+#include "hdr-edids.h"
 
 #ifndef DRM_CLIENT_CAP_ASPECT_RATIO
 #define DRM_CLIENT_CAP_ASPECT_RATIO	4
@@ -166,6 +167,13 @@ enum wdrm_plane_property {
 	WDRM_PLANE_FB_ID,
 	WDRM_PLANE_CRTC_ID,
 	WDRM_PLANE_IN_FORMATS,
+	WDRM_PLANE_DEGAMMA,
+	WDRM_PLANE_DEGAMMA_LUT_SZ,
+	WDRM_PLANE_CTM,
+	WDRM_PLANE_GAMMA,
+	WDRM_PLANE_GAMMA_LUT_SZ,
+	WDRM_PLANE_COLOR_ENCODING,
+	WDRM_PLANE_COLOR_RANGE,
 	WDRM_PLANE__COUNT
 };
 
@@ -208,6 +216,13 @@ static const struct drm_property_info plane_props[] = {
 	[WDRM_PLANE_FB_ID] = { .name = "FB_ID", },
 	[WDRM_PLANE_CRTC_ID] = { .name = "CRTC_ID", },
 	[WDRM_PLANE_IN_FORMATS] = { .name = "IN_FORMATS" },
+	[WDRM_PLANE_DEGAMMA] = { .name = "PLANE_DEGAMMA_LUT"},
+	[WDRM_PLANE_DEGAMMA_LUT_SZ] = { .name = "PLANE_DEGAMMA_LUT_SIZE"},
+	[WDRM_PLANE_CTM] = { .name = "PLANE_CTM"},
+	[WDRM_PLANE_GAMMA] = { .name = "PLANE_GAMMA_LUT"},
+	[WDRM_PLANE_GAMMA_LUT_SZ] = { .name = "PLANE_GAMMA_LUT_SIZE"},
+	[WDRM_PLANE_COLOR_ENCODING] = { .name = "COLOR_ENCODING"},
+	[WDRM_PLANE_COLOR_RANGE] = { .name = "COLOR_RANGE"},
 };
 
 /**
@@ -383,6 +398,48 @@ struct drm_fb {
 	void *map;
 };
 
+enum drm_hdr_metadata_type {
+	DRM_HDR_MD_STATIC = 0,
+	DRM_HDR_MD_DYNAMIC,
+};
+
+static const char *eotf_names[] = {
+	[1] = "ET0 SDR GAMMA Range",
+	[2] = "ET1 HDR GAMMA Range",
+	[4] = "ET2 SMPTE 2048 Range",
+	[8] = "ET3 HLG BT2100 Range",
+	[16] = "Reserved",
+	[32] = "Reserved"
+};
+
+static const char *md_type[] = {
+	[1] = "Type 1",
+};
+
+
+struct drm_hdr_md_static {
+	uint8_t eotf;
+	uint8_t descriptors;
+	uint8_t max_luminance_cv;
+	uint8_t avg_luminance_cv;
+	uint8_t min_luminance_cv;
+};
+
+struct drm_hdr_md_dynamic {
+	uint8_t size;
+	uint8_t *metadata;
+};
+
+struct drm_hdr_metadata_raw {
+	uint8_t size;
+	uint8_t *metadata;
+};
+
+struct drm_hdr_metadata {
+	struct drm_hdr_md_static *s_md;
+	struct drm_hdr_md_dynamic *d_md;
+};
+
 struct drm_edid {
 	char eisa_id[13];
 	char monitor_name[13];
@@ -497,6 +554,7 @@ struct drm_head {
 	struct drm_property_info props_conn[WDRM_CONNECTOR__COUNT];
 
 	struct backlight *backlight;
+	struct drm_hdr_metadata *hdr_md;
 
 	drmModeModeInfo inherited_mode;	/**< Original mode on the connector */
 	uint32_t inherited_crtc_id;	/**< Original CRTC assignment */
@@ -616,7 +674,7 @@ pageflip_timeout(void *data) {
 }
 
 /* Creates the pageflip timer. Note that it isn't armed by default */
-static int
+ int
 drm_output_pageflip_timer_create(struct drm_output *output)
 {
 	struct wl_event_loop *loop = NULL;
@@ -636,7 +694,7 @@ drm_output_pageflip_timer_create(struct drm_output *output)
 	return 0;
 }
 
-static inline struct drm_mode *
+ inline struct drm_mode *
 to_drm_mode(struct weston_mode *base)
 {
 	return container_of(base, struct drm_mode, base);
@@ -656,7 +714,7 @@ to_drm_mode(struct weston_mode *base)
  * @param props Raw KMS properties for the target object
  * @param def Value to return if property is not found
  */
-static uint64_t
+ uint64_t
 drm_property_get_value(struct drm_property_info *info,
 		       const drmModeObjectProperties *props,
 		       uint64_t def)
@@ -724,7 +782,7 @@ drm_property_get_value(struct drm_property_info *info,
  * @param num_infos Number of entries in the source array
  * @param props DRM object properties for the object
  */
-static void
+ void
 drm_property_info_populate(struct drm_backend *b,
 		           const struct drm_property_info *src,
 			   struct drm_property_info *info,
@@ -846,6 +904,16 @@ drm_property_info_free(struct drm_property_info *info, int num_props)
 		free(info[i].enum_values);
 
 	memset(info, 0, sizeof(*info) * num_props);
+}
+
+static void
+drm_hdr_metadata_release(struct drm_hdr_metadata *md)
+{
+	if (md) {
+		free(md->d_md);
+		free(md->s_md);
+		free(md);
+	}
 }
 
 static void
@@ -2131,6 +2199,16 @@ drm_output_render(struct drm_output_state *state, pixman_region32_t *damage)
 }
 
 static void
+drm_output_set_colorspace(struct weston_output *output_base)
+{
+	struct drm_output *output = to_drm_output(output_base);
+	struct drm_backend *backend =
+		to_drm_backend(output->base.compositor);
+
+	weston_log("Shashank: in %s\n", __func__);
+}
+
+static void
 drm_output_set_gamma(struct weston_output *output_base,
 		     uint16_t size, uint16_t *r, uint16_t *g, uint16_t *b)
 {
@@ -2143,6 +2221,7 @@ drm_output_set_gamma(struct weston_output *output_base,
 	if (output_base->gamma_size != size)
 		return;
 
+	weston_log("Shashank: in %s setting gamma\n", __func__);
 	rc = drmModeCrtcSetGamma(backend->drm.fd,
 				 output->crtc_id,
 				 size, r, g, b);
@@ -2445,7 +2524,7 @@ drm_mode_ensure_blob(struct drm_backend *backend, struct drm_mode *mode)
 	return ret;
 }
 
-static int
+ int
 drm_output_apply_state_atomic(struct drm_output_state *state,
 			      drmModeAtomicReq *req,
 			      uint32_t *flags)
@@ -2533,7 +2612,7 @@ drm_output_apply_state_atomic(struct drm_output_state *state,
  * Helper function used only by drm_pending_state_apply, with the same
  * guarantees and constraints as that function.
  */
-static int
+ int
 drm_pending_state_apply_atomic(struct drm_pending_state *pending_state,
 			       enum drm_state_apply_mode mode)
 {
@@ -2665,6 +2744,7 @@ drm_pending_state_apply_atomic(struct drm_pending_state *pending_state,
 		if (mode == DRM_STATE_APPLY_SYNC)
 			assert(output_state->dpms == WESTON_DPMS_OFF);
 		ret |= drm_output_apply_state_atomic(output_state, req, &flags);
+		drm_output_print_planes_atomic(output_state);
 	}
 
 	if (ret != 0) {
@@ -2742,7 +2822,7 @@ drm_pending_state_test(struct drm_pending_state *pending_state)
  *
  * Unconditionally takes ownership of pending_state, and clears state_invalid.
  */
-static int
+ int
 drm_pending_state_apply(struct drm_pending_state *pending_state)
 {
 	struct drm_backend *b = pending_state->backend;
@@ -2794,7 +2874,7 @@ drm_pending_state_apply(struct drm_pending_state *pending_state)
  *
  * Unconditionally takes ownership of pending_state, and clears state_invalid.
  */
-static int
+ int
 drm_pending_state_apply_sync(struct drm_pending_state *pending_state)
 {
 	struct drm_backend *b = pending_state->backend;
@@ -2839,7 +2919,7 @@ drm_pending_state_apply_sync(struct drm_pending_state *pending_state)
 	return 0;
 }
 
-static int
+ int
 drm_output_repaint(struct weston_output *output_base,
 		   pixman_region32_t *damage,
 		   void *repaint_data)
@@ -2877,7 +2957,7 @@ err:
 	return -1;
 }
 
-static void
+ void
 drm_output_start_repaint_loop(struct weston_output *output_base)
 {
 	struct drm_output *output = to_drm_output(output_base);
@@ -2962,7 +3042,7 @@ finish_frame:
 				   WP_PRESENTATION_FEEDBACK_INVALID);
 }
 
-static void
+ void
 drm_output_update_msc(struct drm_output *output, unsigned int seq)
 {
 	uint64_t msc_hi = output->base.msc >> 32;
@@ -2998,7 +3078,7 @@ vblank_handler(int fd, unsigned int frame, unsigned int sec, unsigned int usec,
 	drm_output_update_complete(output, flags, sec, usec);
 }
 
-static void
+ void
 page_flip_handler(int fd, unsigned int frame,
 		  unsigned int sec, unsigned int usec, void *data)
 {
@@ -3027,7 +3107,7 @@ page_flip_handler(int fd, unsigned int frame,
  * a new pending_state structure to own any output state created by individual
  * output repaint functions until the repaint is flushed or cancelled.
  */
-static void *
+ void *
 drm_repaint_begin(struct weston_compositor *compositor)
 {
 	struct drm_backend *b = to_drm_backend(compositor);
@@ -3056,7 +3136,7 @@ drm_repaint_begin(struct weston_compositor *compositor)
  * the update completes (see drm_output_update_complete), the output
  * state will be freed.
  */
-static void
+ void
 drm_repaint_flush(struct weston_compositor *compositor, void *repaint_data)
 {
 	struct drm_backend *b = to_drm_backend(compositor);
@@ -3073,7 +3153,7 @@ drm_repaint_flush(struct weston_compositor *compositor, void *repaint_data)
  * Called by the core compositor when a repaint has finished, so the data
  * held across the repaint cycle should be discarded.
  */
-static void
+ void
 drm_repaint_cancel(struct weston_compositor *compositor, void *repaint_data)
 {
 	struct drm_backend *b = to_drm_backend(compositor);
@@ -3085,7 +3165,7 @@ drm_repaint_cancel(struct weston_compositor *compositor, void *repaint_data)
 }
 
 #ifdef HAVE_DRM_ATOMIC
-static void
+ void
 atomic_flip_handler(int fd, unsigned int frame, unsigned int sec,
 		    unsigned int usec, unsigned int crtc_id, void *data)
 {
@@ -3401,7 +3481,7 @@ err:
 	return NULL;
 }
 
-static void
+ void
 drm_output_set_cursor(struct drm_output_state *output_state)
 {
 	struct drm_output *output = output_state->output;
@@ -3709,7 +3789,7 @@ err:
 	return NULL;
 }
 
-static void
+ void
 drm_assign_planes(struct weston_output *output_base, void *repaint_data)
 {
 	struct drm_backend *b = to_drm_backend(output_base->compositor);
@@ -5053,6 +5133,314 @@ edid_parse_string(const uint8_t *data, char text[])
 #define EDID_OFFSET_PNPID				0x08
 #define EDID_OFFSET_SERIAL				0x0c
 
+#define EDID_BLOCK_LENGTH 				128
+#define EDID_CEA_EXT_ID 				0x02
+#define EDID_CEA_TAG_EXTENDED 				0x7
+#define EDID_CEA_EXT_TAG_STATIC_METADATA 		0x6
+#define EDID_CEA_EXT_TAG_DYNAMIC_METADATA 		0x7
+
+#define ARRAY_SIZE(arr) (sizeof(arr)/sizeof(arr[0]))
+
+/* CTA-861-G: Electro optical transfer function (EOTF) bitmap */
+#define EOTF_ET0_GAMMA_SDR_LUM		(1 << 0)
+#define EOTF_ET1_GAMMA_HDR_LUM		(1 << 1)
+#define EOTF_ET2_SMPTE_2084_LUM	(1 << 2)
+#define EOTF_ET3_HLG_BT_2100_LUM	(1 << 3)
+
+/* CTA-861-G: Static metadata descriptor support bitmap */
+#define STATIC_METADATA_TYPE1 (1 << 0)
+
+void print_hdr_metadata_details(struct drm_hdr_metadata *metadata)
+{
+	if (metadata->s_md) {
+		weston_log("HDR Static metadata details:\n");
+		weston_log("\t|EOTF=0x%x\n \t|desc=0x%x\n \t|max_l=0x%x\n \t|min_l=0x%x\n",
+			metadata->s_md->eotf, metadata->s_md->descriptors,
+			metadata->s_md->max_luminance_cv,
+			metadata->s_md->min_luminance_cv);
+
+		if (metadata->s_md->eotf) {
+			int count = 0;
+
+			for (count = 1; count <= 32; count <<= 1)
+				if (count & metadata->s_md->eotf)
+					weston_log("\t|EOTF: %s\n", eotf_names[count]);
+		}
+
+		if (metadata->s_md->descriptors) {
+			if (metadata->s_md->descriptors & 1)
+				weston_log("\t|Descriptor: %s\n", md_type[1]);
+		}
+	}
+
+	if (metadata->d_md)
+		weston_log("HDR dynamic metadata details:\n \t| sz=%d\n", metadata->d_md->size);
+}
+
+struct drm_hdr_md_dynamic
+*edid_parse_dynamic_hdr_metadata(struct drm_hdr_metadata_raw *raw_md)
+{
+	struct drm_hdr_md_dynamic *dynamic;
+
+	if (!raw_md || !raw_md->size)
+		return NULL;
+
+	dynamic = malloc(sizeof(struct drm_hdr_md_dynamic));
+	if (!dynamic) {
+		weston_log("OOM while parsing dynamic metadata\n");
+		return NULL;
+	}
+
+	dynamic->size = raw_md->size;
+	dynamic->metadata = malloc(raw_md->size);
+	if (!dynamic->metadata) {
+		weston_log("OOM while parsing dynamic metadata\n");
+		free(dynamic);
+		return NULL;
+	}
+
+	memcpy(dynamic->metadata, raw_md->metadata, raw_md->size);
+	return dynamic;
+}
+
+void
+edid_release_dynamic_hdr_metadata(struct drm_hdr_md_dynamic *md)
+{
+	free(md->metadata);
+	free(md);
+}
+
+struct drm_hdr_md_static
+*edid_parse_static_hdr_metadata(struct drm_hdr_metadata_raw *raw_md)
+{
+	struct drm_hdr_md_static *static_md;
+
+	if (!raw_md->size || raw_md->size < 2) {
+		weston_log("Invalid metadata input to static parser\n");
+		return NULL;
+	}
+
+	static_md = malloc(sizeof (struct drm_hdr_md_static));
+	if (!static_md) {
+		weston_log("OOM while parsing static metadata\n");
+		return NULL;
+	}
+
+	memset(static_md, 0, sizeof(struct drm_hdr_md_static));
+	memcpy(static_md, raw_md->metadata, raw_md->size);
+
+	/* EOFT values are lower 5 bits only */
+	static_md->eotf &= 0x3F;
+	return static_md;
+}
+
+void edid_release_static_hdr_metadata(struct drm_hdr_md_static *md)
+{
+	free(md);
+}
+
+const uint8_t
+*edid_find_cea_extension_block(const uint8_t *edid)
+{
+	uint8_t ext_blks;
+	int blk;
+	const uint8_t *ext = NULL;
+
+	if (!edid) {
+		weston_log("No EDID\n");
+		return NULL;
+	}
+
+	ext_blks = edid[126];
+	if (!ext_blks) {
+		weston_log("EDID doesn't have any extension block\n");
+		return NULL;
+	}
+
+	for (blk = 0; blk < ext_blks; blk++) {
+		ext = edid + EDID_BLOCK_LENGTH * (blk + 1);
+		if (ext[0] == EDID_CEA_EXT_ID)
+			break;
+	}
+
+	if (blk == ext_blks)
+		return NULL;
+
+	return ext;
+}
+
+const uint8_t *
+edid_find_extended_data_block(const uint8_t *edid, uint8_t *data_len,
+					uint32_t block_tag)
+{
+	uint8_t d;
+	uint8_t tag;
+	uint8_t extended_tag;
+	uint8_t dblen;
+
+	const uint8_t *dbptr;
+	const uint8_t *cea_db_start;
+	const uint8_t *cea_db_end;
+	const uint8_t *cea_ext_blk;
+	/* Hack
+	const uint8_t *edid = samsung_hdr_edid; */
+
+	if (!edid) {
+		weston_log("No EDID in blob\n");
+		return NULL;
+	}
+
+	cea_ext_blk = edid_find_cea_extension_block(edid);
+	if (!cea_ext_blk) {
+		weston_log("No CEA extension block available\n");
+		return NULL;
+	}
+
+	/* CEA DB starts at blk[4] and ends at blk[d] */
+	d = cea_ext_blk[2];
+	cea_db_start = cea_ext_blk + 4;
+	cea_db_end = cea_ext_blk + d - 1;
+
+	for (dbptr = cea_db_start; dbptr < cea_db_end; dbptr += (dblen +1)) {
+
+		/* First data byte contains db length and tag */
+		dblen = dbptr[0] & 0x1F;
+		tag = dbptr[0] >> 5;
+
+		/* Metadata bock is extended tag block */
+		if (tag != EDID_CEA_TAG_EXTENDED)
+			continue;
+
+		/* Extended block uses one extra byte for extended tag */
+		extended_tag = dbptr[1];
+		if (extended_tag != block_tag)
+			continue;
+
+		*data_len = dblen -1;
+		return dbptr + 2;
+	}
+
+	return NULL;
+}
+
+static struct drm_hdr_metadata_raw
+*edid_get_raw_hdr_metadata(const uint8_t *edid,
+			enum drm_hdr_metadata_type type)
+{
+	uint8_t data_len;
+	const uint8_t *hdr_db;
+	uint32_t flag;
+	struct drm_hdr_metadata_raw *raw_md;
+
+	flag = type + EDID_CEA_EXT_TAG_STATIC_METADATA;
+	hdr_db = edid_find_extended_data_block(edid, &data_len, flag);
+	if (!hdr_db || data_len == 0)
+		return NULL;
+
+	raw_md = malloc(sizeof(struct drm_hdr_metadata_raw));
+	if (!raw_md) {
+		weston_log("OOM while getting HDR metadata\n");
+		return NULL;
+	}
+
+	/* For extended data blocks, length includes extended tag block too */
+	raw_md->metadata = malloc(data_len);
+	if (!raw_md->metadata) {
+		free(raw_md);
+		weston_log("OOM while getting HDR metadata\n");
+		return NULL;
+	}
+
+	memcpy(raw_md->metadata, hdr_db, data_len);
+	raw_md->size = data_len;
+	return raw_md;
+}
+
+void edid_release_raw_metadata_block(struct drm_hdr_metadata_raw *block)
+{
+	if (!block)
+		return;
+	free(block->metadata);
+	free(block);
+}
+
+struct drm_hdr_md_static
+*drm_get_hdr_static_metadata(const uint8_t *edid)
+{
+	struct drm_hdr_metadata_raw *raw_md;
+	struct drm_hdr_md_static *static_md = NULL;
+
+	raw_md = edid_get_raw_hdr_metadata(edid, DRM_HDR_MD_STATIC);
+	if (raw_md) {
+		static_md = edid_parse_static_hdr_metadata(raw_md);
+		edid_release_raw_metadata_block(raw_md);
+	}
+
+	return static_md;
+}
+
+struct drm_hdr_md_dynamic
+*drm_get_hdr_dynamic_metadata(const uint8_t *edid)
+{
+	struct drm_hdr_metadata_raw *raw_md;
+	struct drm_hdr_md_dynamic *dynamic_md = NULL;
+
+	raw_md = edid_get_raw_hdr_metadata(edid, DRM_HDR_MD_DYNAMIC);
+	if (raw_md) {
+		dynamic_md = edid_parse_dynamic_hdr_metadata(raw_md);
+		edid_release_raw_metadata_block(raw_md);
+	}
+
+	return dynamic_md;
+}
+
+void drm_release_hdr_metadata(struct drm_hdr_metadata *metadata)
+{
+	if (!metadata)
+		return;
+
+	if (metadata->s_md) {
+		free(metadata->s_md);
+		metadata->s_md = NULL;
+	}
+
+	if (metadata->d_md) {
+		free(metadata->d_md);
+		metadata->d_md = NULL;
+	}
+}
+
+struct drm_hdr_metadata
+*drm_get_hdr_metadata(const uint8_t *edid, uint32_t data_len)
+{
+	struct drm_hdr_metadata *metadata = NULL;
+
+	/* We are looking for CEA extension block */
+	if (!edid || data_len <= EDID_BLOCK_LENGTH)
+		return NULL;
+
+	metadata = malloc(sizeof(struct drm_hdr_metadata));
+	if (!metadata) {
+		weston_log("OOM while getting HDR metadata\n");
+		return NULL;
+	}
+
+	metadata->s_md = drm_get_hdr_static_metadata(edid);
+	if (metadata->s_md)
+		weston_log("Found static HDR metadata in EDID\n");
+
+	metadata->d_md = drm_get_hdr_dynamic_metadata(edid);
+	if (metadata->d_md)
+		weston_log("Found Dyamic HDR metadata in EDID\n");
+
+	if (!metadata->s_md && !metadata->d_md) {
+		free(metadata);
+		metadata = NULL;
+	}
+
+	return metadata;
+}
+
 static int
 edid_parse(struct drm_edid *edid, const uint8_t *data, size_t length)
 {
@@ -5060,7 +5448,7 @@ edid_parse(struct drm_edid *edid, const uint8_t *data, size_t length)
 	uint32_t serial_number;
 
 	/* check header */
-	if (length < 128)
+	if (length < EDID_BLOCK_LENGTH)
 		return -1;
 	if (data[0] != 0x00 || data[1] != 0xff)
 		return -1;
@@ -5105,12 +5493,13 @@ edid_parse(struct drm_edid *edid, const uint8_t *data, size_t length)
 					  edid->eisa_id);
 		}
 	}
+
 	return 0;
 }
 
-/** Parse monitor make, model and serial from EDID
+/** Parse monitor make, model, serial and HDR metadata from EDID
  *
- * \param head The head whose \c drm_edid to fill in.
+ * \param head The head whose \c drm_edid and metadata to fill in.
  * \param props The DRM connector properties to get the EDID from.
  * \param make[out] The monitor make (PNP ID).
  * \param model[out] The monitor model (name).
@@ -5153,6 +5542,18 @@ find_and_parse_output_edid(struct drm_head *head,
 		if (head->edid.serial_number[0] != '\0')
 			*serial_number = head->edid.serial_number;
 	}
+
+	if (head->hdr_md)
+		drm_hdr_metadata_release(head->hdr_md);
+	weston_log("Shashank: in %s getting hdr info\n", __func__);
+	//head->hdr_md = drm_get_hdr_metadata(edid_blob->data, edid_blob->length);
+	head->hdr_md = drm_get_hdr_metadata(samsung_hdr_edid, 256);
+
+	if (head->hdr_md) {
+		weston_log("Shashank: in %s printing hdr_md\n", __func__);
+		print_hdr_metadata_details(head->hdr_md);
+	}
+
 	drmModeFreePropertyBlob(edid_blob);
 }
 
@@ -5934,6 +6335,165 @@ drm_output_print_modes(struct drm_output *output)
 	}
 }
 
+struct drm_format_name {
+	uint32_t format;
+	char name[128];
+};
+
+struct drm_format_name format_names[] = {
+	{.format=DRM_FORMAT_C8,.name="FORMAT_C8"},
+	{.format=DRM_FORMAT_R8,.name="FORMAT_R8"},
+	{.format=DRM_FORMAT_R16,.name="FORMAT_R16"},
+	{.format=DRM_FORMAT_RG88,.name="FORMAT_RG88"},
+	{.format=DRM_FORMAT_GR88,.name="FORMAT_GR88"},
+	{.format=DRM_FORMAT_RG1616,.name="FORMAT_RG1616"},
+	{.format=DRM_FORMAT_GR1616,.name="FORMAT_GR1616"},
+	{.format=DRM_FORMAT_RGB332,.name="FORMAT_RGB332"},
+	{.format=DRM_FORMAT_BGR233,.name="FORMAT_BGR233"},
+	{.format=DRM_FORMAT_XRGB4444,.name="FORMAT_XRGB4444"},
+	{.format=DRM_FORMAT_XBGR4444,.name="FORMAT_XBGR4444"},
+	{.format=DRM_FORMAT_RGBX4444,.name="FORMAT_RGBX4444"},
+	{.format=DRM_FORMAT_BGRX4444,.name="FORMAT_BGRX4444"},
+	{.format=DRM_FORMAT_ARGB4444,.name="FORMAT_ARGB4444"},
+	{.format=DRM_FORMAT_ABGR4444,.name="FORMAT_ABGR4444"},
+	{.format=DRM_FORMAT_RGBA4444,.name="FORMAT_RGBA4444"},
+	{.format=DRM_FORMAT_BGRA4444,.name="FORMAT_BGRA4444"},
+	{.format=DRM_FORMAT_XRGB1555,.name="FORMAT_XRGB1555"},
+	{.format=DRM_FORMAT_XBGR1555,.name="FORMAT_XBGR1555"},
+	{.format=DRM_FORMAT_RGBX5551,.name="FORMAT_RGBX5551"},
+	{.format=DRM_FORMAT_BGRX5551,.name="FORMAT_BGRX5551"},
+	{.format=DRM_FORMAT_ARGB1555,.name="FORMAT_ARGB1555"},
+	{.format=DRM_FORMAT_ABGR1555,.name="FORMAT_ABGR1555"},
+	{.format=DRM_FORMAT_RGBA5551,.name="FORMAT_RGBA5551"},
+	{.format=DRM_FORMAT_BGRA5551,.name="FORMAT_BGRA5551"},
+	{.format=DRM_FORMAT_RGB565,.name="FORMAT_RGB565"},
+	{.format=DRM_FORMAT_BGR565,.name="FORMAT_BGR565"},
+	{.format=DRM_FORMAT_RGB888,.name="FORMAT_RGB888"},
+	{.format=DRM_FORMAT_BGR888,.name="FORMAT_BGR888"},
+	{.format=DRM_FORMAT_XRGB8888,.name="FORMAT_XRGB8888"},
+	{.format=DRM_FORMAT_XBGR8888,.name="FORMAT_XBGR8888"},
+	{.format=DRM_FORMAT_RGBX8888,.name="FORMAT_RGBX8888"},
+	{.format=DRM_FORMAT_BGRX8888,.name="FORMAT_BGRX8888"},
+	{.format=DRM_FORMAT_ARGB8888,.name="FORMAT_ARGB8888"},
+	{.format=DRM_FORMAT_ABGR8888,.name="FORMAT_ABGR8888"},
+	{.format=DRM_FORMAT_RGBA8888,.name="FORMAT_RGBA8888"},
+	{.format=DRM_FORMAT_BGRA8888,.name="FORMAT_BGRA8888"},
+	{.format=DRM_FORMAT_XRGB2101010,.name="FORMAT_XRGB2101010"},
+	{.format=DRM_FORMAT_XBGR2101010,.name="FORMAT_XBGR2101010"},
+	{.format=DRM_FORMAT_RGBX1010102,.name="FORMAT_RGBX1010102"},
+	{.format=DRM_FORMAT_BGRX1010102,.name="FORMAT_BGRX1010102"},
+	{.format=DRM_FORMAT_ARGB2101010,.name="FORMAT_ARGB2101010"},
+	{.format=DRM_FORMAT_ABGR2101010,.name="FORMAT_ABGR2101010"},
+	{.format=DRM_FORMAT_RGBA1010102,.name="FORMAT_RGBA1010102"},
+	{.format=DRM_FORMAT_BGRA1010102,.name="FORMAT_BGRA1010102"},
+	{.format=DRM_FORMAT_YUYV,.name="FORMAT_YUYV"},
+	{.format=DRM_FORMAT_YVYU,.name="FORMAT_YVYU"},
+	{.format=DRM_FORMAT_UYVY,.name="FORMAT_UYVY"},
+	{.format=DRM_FORMAT_VYUY,.name="FORMAT_VYUY"},
+	{.format=DRM_FORMAT_AYUV,.name="FORMAT_AYUV"},
+	{.format=DRM_FORMAT_XRGB8888_A8,.name="FORMAT_XRGB8888_A8"},
+	{.format=DRM_FORMAT_XBGR8888_A8,.name="FORMAT_XBGR8888_A8"},
+	{.format=DRM_FORMAT_RGBX8888_A8,.name="FORMAT_RGBX8888_A8"},
+	{.format=DRM_FORMAT_BGRX8888_A8,.name="FORMAT_BGRX8888_A8"},
+	{.format=DRM_FORMAT_RGB888_A8,.name="FORMAT_RGB888_A8"},
+	{.format=DRM_FORMAT_BGR888_A8,.name="FORMAT_BGR888_A8"},
+	{.format=DRM_FORMAT_RGB565_A8,.name="FORMAT_RGB565_A8"},
+	{.format=DRM_FORMAT_BGR565_A8,.name="FORMAT_BGR565_A8"},
+	{.format=DRM_FORMAT_NV12,.name="FORMAT_NV12"},
+	{.format=DRM_FORMAT_NV21,.name="FORMAT_NV21"},
+	{.format=DRM_FORMAT_NV16,.name="FORMAT_NV16"},
+	{.format=DRM_FORMAT_NV61,.name="FORMAT_NV61"},
+	{.format=DRM_FORMAT_NV24,.name="FORMAT_NV24"},
+	{.format=DRM_FORMAT_NV42,.name="FORMAT_NV42"},
+	{.format=DRM_FORMAT_YUV410,.name="FORMAT_YUV410"},
+	{.format=DRM_FORMAT_YVU410,.name="FORMAT_YVU410"},
+	{.format=DRM_FORMAT_YUV411,.name="FORMAT_YUV411"},
+	{.format=DRM_FORMAT_YVU411,.name="FORMAT_YVU411"},
+	{.format=DRM_FORMAT_YUV420,.name="FORMAT_YUV420"},
+	{.format=DRM_FORMAT_YVU420,.name="FORMAT_YVU420"},
+	{.format=DRM_FORMAT_YUV422,.name="FORMAT_YUV422"},
+	{.format=DRM_FORMAT_YVU422,.name="FORMAT_YVU422"},
+	{.format=DRM_FORMAT_YUV444,.name="FORMAT_YUV444"},
+	{.format=DRM_FORMAT_YVU444,.name="FORMAT_YVU444"},
+};
+
+const char *drm_print_format_name(uint32_t format)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(format_names); i++)
+		if (format == format_names[i].format)
+			return format_names[i].name;
+	return NULL;
+}
+
+void drm_atomic_print_plane(struct drm_plane *plane)
+{
+	int t = 0;
+	struct drm_property_info *prop;
+
+	weston_log_continue("============= plane properties: ==============\n");
+	while (t < WDRM_PLANE__COUNT) {
+		prop = &plane->props[t++];
+		if (prop) {
+			int v = 0;
+			struct drm_property_enum_info *ei;
+
+			weston_log("\tShashank: %s\n", prop->name);
+			while (v < prop->num_enum_values) {
+				ei = &prop->enum_values[v];
+				if (!ei)
+					continue;
+
+				weston_log_continue("\tShashank: val[%d]-> name=%s val=0x%lx\n",
+							v++, ei->name, ei->value);
+			}
+		}
+	}
+	weston_log_continue("============= =================== ===============\n");
+
+	t = 0;
+	weston_log_continue("============== supported formats ================\n");
+	while (t < plane->count_formats)
+		weston_log_continue("%s\n", 
+		drm_print_format_name(plane->formats[t++].format));
+	weston_log_continue("============= =================== ===============\n");
+}
+
+void drm_output_print_planes_atomic(struct drm_output_state *os)
+{
+	struct drm_plane_state *ps;
+
+	wl_list_for_each(ps, &os->plane_list, link) {
+		if (ps->plane) {
+			struct drm_plane *plane = ps->plane;
+			struct drm_fb *fb;
+
+			weston_log("\n");
+			weston_log_continue("###########################################\n");
+			weston_log_continue("Shashank: Plane id:%d, type:%s\n", plane->plane_id,
+						plane_type_enums[plane->type].name);
+
+			if (plane->type == WDRM_PLANE_TYPE_CURSOR)
+				continue;
+
+			drm_atomic_print_plane(plane);
+			fb = ps->fb;
+			if (fb) {
+				weston_log_continue("========== FB ==============\n");
+				weston_log_continue("Shashank: fb id:%d\n",fb->fb_id);
+
+				if (fb->format) {
+					weston_log_continue("Shashank: fb format %s\n",
+							drm_print_format_name(fb->format->format));
+				}
+				weston_log_continue("========== end ==============\n");
+			}
+			weston_log_continue("###########################################\n");
+		}
+	}
+}
+
 static int
 drm_output_enable(struct weston_output *base)
 {
@@ -5976,6 +6536,7 @@ drm_output_enable(struct weston_output *base)
 	output->base.set_dpms = drm_set_dpms;
 	output->base.switch_mode = drm_output_switch_mode;
 	output->base.set_gamma = drm_output_set_gamma;
+	output->base.set_colorspace = drm_output_set_colorspace;
 
 	if (output->cursor_plane)
 		weston_compositor_stack_plane(b->compositor,
@@ -6288,6 +6849,7 @@ drm_head_destroy(struct drm_head *head)
 	weston_head_release(&head->base);
 
 	drm_property_info_free(head->props_conn, WDRM_CONNECTOR__COUNT);
+	drm_hdr_metadata_release(head->hdr_md);
 	drmModeFreeConnector(head->connector);
 
 	if (head->backlight)
@@ -6926,8 +7488,6 @@ drm_backend_create(struct weston_compositor *compositor,
 	if (config->seat_id)
 		seat_id = config->seat_id;
 
-	weston_log("initializing drm backend\n");
-
 	b = zalloc(sizeof *b);
 	if (b == NULL)
 		return NULL;
@@ -6947,7 +7507,8 @@ drm_backend_create(struct weston_compositor *compositor,
 
 	compositor->backend = &b->base;
 
-	if (parse_gbm_format(config->gbm_format, GBM_FORMAT_XRGB8888, &b->gbm_format) < 0)
+	if (parse_gbm_format(config->gbm_format, GBM_FORMAT_XRGB8888,
+		&b->gbm_format) < 0)
 		goto err_compositor;
 
 	/* Check if we run drm-backend using weston-launch */
@@ -7013,6 +7574,7 @@ drm_backend_create(struct weston_compositor *compositor,
 		goto err_sprite;
 	}
 
+	weston_log("Shashank: in %s creating heads\n", __func__);
 	if (drm_backend_create_heads(b, drm_device) < 0) {
 		weston_log("Failed to create heads for %s\n", b->drm.filename);
 		goto err_udev_input;
@@ -7120,6 +7682,7 @@ weston_backend_init(struct weston_compositor *compositor,
 	config_init_to_defaults(&config);
 	memcpy(&config, config_base, config_base->struct_size);
 
+	weston_log("Shashank: in %s creating drm backend\n", __func__);
 	b = drm_backend_create(compositor, &config);
 	if (b == NULL)
 		return -1;

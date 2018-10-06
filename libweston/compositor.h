@@ -288,6 +288,7 @@ struct weston_output {
 			  uint16_t *r,
 			  uint16_t *g,
 			  uint16_t *b);
+	void (*set_colorspace)(struct weston_output *output);
 
 	struct weston_timeline_object timeline;
 
