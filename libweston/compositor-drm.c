@@ -674,7 +674,7 @@ pageflip_timeout(void *data) {
 }
 
 /* Creates the pageflip timer. Note that it isn't armed by default */
-static int
+ int
 drm_output_pageflip_timer_create(struct drm_output *output)
 {
 	struct wl_event_loop *loop = NULL;
@@ -694,7 +694,7 @@ drm_output_pageflip_timer_create(struct drm_output *output)
 	return 0;
 }
 
-static inline struct drm_mode *
+ inline struct drm_mode *
 to_drm_mode(struct weston_mode *base)
 {
 	return container_of(base, struct drm_mode, base);
@@ -714,7 +714,7 @@ to_drm_mode(struct weston_mode *base)
  * @param props Raw KMS properties for the target object
  * @param def Value to return if property is not found
  */
-static uint64_t
+ uint64_t
 drm_property_get_value(struct drm_property_info *info,
 		       const drmModeObjectProperties *props,
 		       uint64_t def)
@@ -782,7 +782,7 @@ drm_property_get_value(struct drm_property_info *info,
  * @param num_infos Number of entries in the source array
  * @param props DRM object properties for the object
  */
-static void
+ void
 drm_property_info_populate(struct drm_backend *b,
 		           const struct drm_property_info *src,
 			   struct drm_property_info *info,
@@ -2524,7 +2524,7 @@ drm_mode_ensure_blob(struct drm_backend *backend, struct drm_mode *mode)
 	return ret;
 }
 
-static int
+ int
 drm_output_apply_state_atomic(struct drm_output_state *state,
 			      drmModeAtomicReq *req,
 			      uint32_t *flags)
@@ -2612,7 +2612,7 @@ drm_output_apply_state_atomic(struct drm_output_state *state,
  * Helper function used only by drm_pending_state_apply, with the same
  * guarantees and constraints as that function.
  */
-static int
+ int
 drm_pending_state_apply_atomic(struct drm_pending_state *pending_state,
 			       enum drm_state_apply_mode mode)
 {
@@ -2822,7 +2822,7 @@ drm_pending_state_test(struct drm_pending_state *pending_state)
  *
  * Unconditionally takes ownership of pending_state, and clears state_invalid.
  */
-static int
+ int
 drm_pending_state_apply(struct drm_pending_state *pending_state)
 {
 	struct drm_backend *b = pending_state->backend;
@@ -2874,7 +2874,7 @@ drm_pending_state_apply(struct drm_pending_state *pending_state)
  *
  * Unconditionally takes ownership of pending_state, and clears state_invalid.
  */
-static int
+ int
 drm_pending_state_apply_sync(struct drm_pending_state *pending_state)
 {
 	struct drm_backend *b = pending_state->backend;
@@ -2919,7 +2919,7 @@ drm_pending_state_apply_sync(struct drm_pending_state *pending_state)
 	return 0;
 }
 
-static int
+ int
 drm_output_repaint(struct weston_output *output_base,
 		   pixman_region32_t *damage,
 		   void *repaint_data)
@@ -2957,7 +2957,7 @@ err:
 	return -1;
 }
 
-static void
+ void
 drm_output_start_repaint_loop(struct weston_output *output_base)
 {
 	struct drm_output *output = to_drm_output(output_base);
@@ -3042,7 +3042,7 @@ finish_frame:
 				   WP_PRESENTATION_FEEDBACK_INVALID);
 }
 
-static void
+ void
 drm_output_update_msc(struct drm_output *output, unsigned int seq)
 {
 	uint64_t msc_hi = output->base.msc >> 32;
@@ -3078,7 +3078,7 @@ vblank_handler(int fd, unsigned int frame, unsigned int sec, unsigned int usec,
 	drm_output_update_complete(output, flags, sec, usec);
 }
 
-static void
+ void
 page_flip_handler(int fd, unsigned int frame,
 		  unsigned int sec, unsigned int usec, void *data)
 {
@@ -3107,7 +3107,7 @@ page_flip_handler(int fd, unsigned int frame,
  * a new pending_state structure to own any output state created by individual
  * output repaint functions until the repaint is flushed or cancelled.
  */
-static void *
+ void *
 drm_repaint_begin(struct weston_compositor *compositor)
 {
 	struct drm_backend *b = to_drm_backend(compositor);
@@ -3136,7 +3136,7 @@ drm_repaint_begin(struct weston_compositor *compositor)
  * the update completes (see drm_output_update_complete), the output
  * state will be freed.
  */
-static void
+ void
 drm_repaint_flush(struct weston_compositor *compositor, void *repaint_data)
 {
 	struct drm_backend *b = to_drm_backend(compositor);
@@ -3153,7 +3153,7 @@ drm_repaint_flush(struct weston_compositor *compositor, void *repaint_data)
  * Called by the core compositor when a repaint has finished, so the data
  * held across the repaint cycle should be discarded.
  */
-static void
+ void
 drm_repaint_cancel(struct weston_compositor *compositor, void *repaint_data)
 {
 	struct drm_backend *b = to_drm_backend(compositor);
@@ -3165,7 +3165,7 @@ drm_repaint_cancel(struct weston_compositor *compositor, void *repaint_data)
 }
 
 #ifdef HAVE_DRM_ATOMIC
-static void
+ void
 atomic_flip_handler(int fd, unsigned int frame, unsigned int sec,
 		    unsigned int usec, unsigned int crtc_id, void *data)
 {
