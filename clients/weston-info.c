@@ -1418,8 +1418,10 @@ static const struct zxdg_output_v1_listener xdg_output_v1_listener = {
 	.logical_position = handle_xdg_output_v1_logical_position,
 	.logical_size = handle_xdg_output_v1_logical_size,
 	.done = handle_xdg_output_v1_done,
+#if 0
 	.name = handle_xdg_output_v1_name,
 	.description = handle_xdg_output_v1_description,
+#endif
 };
 
 static void
