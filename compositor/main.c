@@ -1074,13 +1074,17 @@ weston_choose_default_backend(void)
 {
 	char *backend = NULL;
 
+#if 0 /* Shashank HACK */
 	if (getenv("WAYLAND_DISPLAY") || getenv("WAYLAND_SOCKET"))
 		backend = strdup("wayland-backend.so");
 	else if (getenv("DISPLAY"))
 		backend = strdup("x11-backend.so");
 	else
 		backend = strdup(WESTON_NATIVE_BACKEND);
-
+#else
+	weston_log("Shashank: Hack: DRM backend\n");
+	backend = strdup(WESTON_NATIVE_BACKEND);
+#endif
 	return backend;
 }
 

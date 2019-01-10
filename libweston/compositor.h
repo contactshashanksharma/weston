@@ -1396,6 +1396,42 @@ struct weston_pointer_constraint {
 	struct wl_listener surface_activate_listener;
 };
 
+enum weston_hdr_metadata_eotf {
+	EOTF_TRADITIONAL_GAMMA_SDR,
+	EOTF_TRADITIONAL_GAMMA_HDR,
+	EOTF_ST2084,
+	EOTF_HLG,
+};
+
+struct weston_hdr_metadata_dynamic {
+	uint8_t size;
+	uint8_t *metadata;
+};
+
+struct weston_hdr_metadata_static {
+	uint16_t display_primary_r_x;
+	uint16_t display_primary_r_y;
+	uint16_t display_primary_g_x;
+	uint16_t display_primary_g_y;
+	uint16_t display_primary_b_x;
+	uint16_t display_primary_b_y;
+	uint16_t white_point_x;
+	uint16_t white_point_y;
+	uint16_t max_luminance;
+	uint16_t min_luminance;
+	uint16_t max_cll;
+	uint16_t max_fall;
+	uint8_t eotf;
+};
+
+struct weston_hdr_metadata {
+	uint8_t metadata_type;
+	union {
+		struct weston_hdr_metadata_static s;
+		struct weston_hdr_metadata_dynamic d;
+	} metadata;
+};
+
 struct weston_surface {
 	struct wl_resource *resource;
 	struct wl_signal destroy_signal; /* callback argument: this surface */
@@ -1484,6 +1520,12 @@ struct weston_surface {
 
 	bool is_mapped;
 	bool is_opaque;
+
+	/* Metadata pointer, if surface is a HDR surface */
+	struct weston_hdr_metadata *hdr_metadata;
+
+	/* Colorspace of surface */
+	int32_t colorspace;
 
 	/* An list of per seat pointer constraints. */
 	struct wl_list pointer_constraints;

@@ -2422,7 +2422,6 @@ weston_output_repaint(struct weston_output *output, void *repaint_data)
 			ev->psf_flags = 0;
 		}
 	}
-
 	wl_list_init(&frame_callback_list);
 	wl_list_for_each(ev, &ec->view_list, link) {
 		/* Note: This operation is safe to do multiple times on the
