@@ -3752,6 +3752,91 @@ err:
 	return NULL;
 }
 
+static struct drm_output_state *
+drm_output_propose_hdr_state(struct weston_output *output_base,
+			 struct drm_pending_state *pending_state)
+{
+	struct drm_output *output = to_drm_output(output_base);
+	struct drm_backend *b = to_drm_backend(output->base.compositor);
+	struct drm_output_state *state;
+	struct drm_plane_state *ps = NULL;
+	struct weston_surface *surface = NULL;
+	struct weston_view *ev;
+
+	assert(!output->state_last);
+	state = drm_output_state_duplicate(output->state_cur,
+					   pending_state,
+					   DRM_OUTPUT_STATE_CLEAR_PLANES);
+
+	/* HDR view is supported in full screen limited view only for now,
+	* so we are expecting only the HDR surface on screen. If there is
+	* any other view, we will discard it for now */
+	wl_list_for_each(ev, &output_base->compositor->view_list, link) {
+
+		/* If this view doesn't touch our output at all, there's no
+		 * reason to do anything with it. */
+		if (!(ev->output_mask & (1u << output->base.id))) {
+			drm_debug(b, "\t\t\t\t[view] ignoring view %p "
+			             "(not on our output)\n", ev);
+			continue;
+		}
+
+		/* We only assign planes to views which are exclusively present
+		 * on our output. */
+		if (ev->output_mask != (1u << output->base.id)) {
+			drm_debug(b, "\t\t\t\t[view] not assigning view %p to plane "
+			             "(on multiple outputs)\n", ev);
+			continue;
+		}
+
+		surface = ev->surface;
+		if (!surface)
+			continue;
+
+		if (surface->hdr_md_s) {
+			drm_debug(b, "\t\t\t\t[view] Found HDR surface %p\n", ev);
+			break;
+		}
+
+		drm_debug(b, "\t\t\t\t[view] ignoring view %p to plane "
+			         "(non-hdr)\n", ev);
+		continue;
+	}
+
+	if(!surface->hdr_md_s)
+		goto err;
+
+	/* We are here means we have a HDR surface, this should be our only
+	* HDR surface, as we are not supporting multiple ones for now */
+	drm_debug(b, "\t\t\t[view] evaluating HDR view %p for "
+				"output %s (%lu)\n",
+				ev, output->base.name,
+				(unsigned long) output->base.id);
+
+#error: Shashank fix this
+	if (!surface->buffer_ref.buffer) {
+		drm_debug(b, "\t\t\t\t[view] not assigning view %p to plane "
+		             "(no buffer available)\n", ev);
+	}
+
+	ps = drm_output_prepare_overlay_view(state, ev,
+			DRM_OUTPUT_PROPOSE_STATE_PLANES_ONLY);
+	if (!ps) {
+		drm_debug(b, "\t\t[view] failing state generation: "
+			     "atomic test not OK\n");
+		weston_log("Shashank: Atomic check with HDR surface failed\n");
+		goto err;
+	}
+
+	weston_log("Shashank: Success: propose HDR state\n");
+	return state;
+
+err:
+	drm_output_state_free(state);
+	return NULL;
+}
+
+
 static const char *
 drm_propose_state_mode_to_string(enum drm_output_propose_state_mode mode)
 {
@@ -3772,9 +3857,52 @@ drm_assign_planes(struct weston_output *output_base, void *repaint_data)
 	struct weston_view *ev;
 	struct weston_plane *primary = &output_base->compositor->primary_plane;
 	enum drm_output_propose_state_mode mode = DRM_OUTPUT_PROPOSE_STATE_PLANES_ONLY;
+	struct drm_plane *target_plane = NULL;
 
 	drm_debug(b, "\t[repaint] preparing state for output %s (%lu)\n",
 		  output_base->name, (unsigned long) output_base->id);
+
+	/* Check if we are dealing with HDR view */
+	wl_list_for_each(ev, &output_base->compositor->view_list, link) {
+		struct weston_surface *surface = ev->surface;
+
+		if (!surface || !surface->hdr_md_s) {
+				continue;
+
+			/* HDR surfaces need special handling */
+			state = drm_output_propose_hdr_state(output_base, pending_state);
+			if (!state) {
+				weston_log("Shashank: propose HDR state failed\n");
+				goto assign_normal;
+			}
+
+			weston_log("Shashank: got a HDR state, finding target plane\n");
+			wl_list_for_each(plane_state, &state->plane_list, link) {
+				if (plane_state->ev == ev) {
+					plane_state->ev = NULL;
+					target_plane = plane_state->plane;
+					break;
+				}
+			}
+
+			if (target_plane) {
+				weston_view_move_to_plane(ev, &target_plane->base);
+				drm_debug(b, "\t[repaint] assign HDR plane success "
+					  "target HDR plane(%d %s)\n", target_plane->plane_id,
+					  plane_type_enums[target_plane->type].name);
+				weston_log("Shashank: HDR plane alloc success %d,%s\n",
+					   target_plane->plane_id,
+					   plane_type_enums[target_plane->type].name);
+				return;
+			}
+
+			weston_log("Shashank: Cant get HDR plane for state\n");
+		}
+	}
+
+assign_normal:
+	target_plane = NULL;
+	state = NULL;
 
 	if (!b->sprites_are_broken && !output->virtual) {
 		drm_debug(b, "\t[repaint] trying planes-only build state\n");
@@ -3806,7 +3934,6 @@ drm_assign_planes(struct weston_output *output_base, void *repaint_data)
 		  drm_propose_state_mode_to_string(mode));
 
 	wl_list_for_each(ev, &output_base->compositor->view_list, link) {
-		struct drm_plane *target_plane = NULL;
 
 		/* If this view doesn't touch our output at all, there's no
 		 * reason to do anything with it. */
