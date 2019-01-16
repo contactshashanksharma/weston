@@ -1027,6 +1027,7 @@ create_dmabuf_buffer(struct app *app, struct buffer *buffer,
 	case DRM_FORMAT_P010:
 		buffer->height = height * 3 / 2;
 		buffer->bpp = 16;
+		break;
 	default:
 		buffer->height = height;
 		buffer->bpp = 32;
