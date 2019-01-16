@@ -195,6 +195,7 @@ bind_hdr_metadata(struct wl_client *client,
 WL_EXPORT int
 weston_hdr_metadata_setup(struct weston_compositor *compositor)
 {
+#if 0
 	if (!wl_global_create(compositor->wl_display,
 			      &zwp_hdr_metadata_v1_interface, 1,
 			      compositor, bind_hdr_metadata))
@@ -206,6 +207,6 @@ weston_hdr_metadata_setup(struct weston_compositor *compositor)
 	wl_display_add_shm_format(compositor->wl_display, WL_SHM_FORMAT_YVU420_10);
 	wl_display_add_shm_format(compositor->wl_display, WL_SHM_FORMAT_YVU420_12);
 	wl_display_add_shm_format(compositor->wl_display, WL_SHM_FORMAT_YVU420_16);
-
+#endif
 	return 0;
 }
