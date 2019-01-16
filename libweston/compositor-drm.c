@@ -3764,6 +3764,7 @@ drm_output_propose_hdr_state(struct weston_output *output_base,
 	struct drm_plane_state *ps = NULL;
 	struct weston_surface *surface = NULL;
 	struct weston_view *ev;
+	bool cursor_prepared = false;
 
 	assert(!output->state_last);
 	state = drm_output_state_duplicate(output->state_cur,
@@ -3798,6 +3799,15 @@ drm_output_propose_hdr_state(struct weston_output *output_base,
 		if (surface->hdr_metadata) {
 			drm_debug(b, "\t\t\t\t[view] Found HDR surface %p\n", ev);
 			break;
+		}
+
+		/* Try to accommodate cursor */
+		if (!cursor_prepared) {
+			ps = drm_output_prepare_cursor_view(state, ev);
+			if (ps) {
+				cursor_prepared = true;
+				weston_log("Shashank: found cursor\n");
+			}
 		}
 
 		drm_debug(b, "\t\t\t\t[view] ignoring SDR view %p\n", ev);
