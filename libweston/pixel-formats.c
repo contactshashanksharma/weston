@@ -52,6 +52,10 @@
 #define SAMPLER_TYPE(type) .sampler_type = 0
 #endif
 
+#ifndef DRM_FORMAT_P010
+#define DRM_FORMAT_P010         fourcc_code('P', '0', '1', '0') /* 2x2 subsampled Cb:Cr plane 10 bits per channel */
+#endif
+
 #define DRM_FORMAT(f) .format = DRM_FORMAT_ ## f, .drm_format_name = #f
 
 #include "weston-egl-ext.h"
@@ -347,6 +351,15 @@ static const struct pixel_format_info pixel_format_table[] = {
 		.chroma_order = ORDER_VU,
 		.hsub = 2,
 		.vsub = 2,
+	},
+	{
+		DRM_FORMAT(P010),
+		SAMPLER_TYPE(EGL_TEXTURE_Y_U_V_WL),
+		.num_planes = 3,
+		.chroma_order = ORDER_VU,
+		.hsub = 2,
+		.vsub = 2,
+		.depth = 30,
 	},
 	{
 		DRM_FORMAT(YUV422),
