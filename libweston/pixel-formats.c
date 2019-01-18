@@ -360,6 +360,7 @@ static const struct pixel_format_info pixel_format_table[] = {
 		.hsub = 2,
 		.vsub = 2,
 		.depth = 30,
+		.bpp = 32,
 	},
 	{
 		DRM_FORMAT(YUV422),
