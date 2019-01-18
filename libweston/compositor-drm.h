@@ -27,6 +27,7 @@
 
 #ifndef WESTON_COMPOSITOR_DRM_H
 #define WESTON_COMPOSITOR_DRM_H
+#include <va/va.h>
 
 #include "compositor.h"
 #include "plugin-registry.h"
@@ -224,6 +225,23 @@ struct weston_drm_backend_config {
 	/** Use shadow buffer if using Pixman-renderer. */
 	bool use_pixman_shadow;
 };
+
+/* va-hdr.c */
+struct drm_va_display {
+	int render_fd;
+	int32_t major_ver;
+	int32_t minor_ver;
+	int32_t width;
+	int32_t height;
+
+	VAConfigID cfg_id;
+	VAConfigID ctx_id;
+	VADisplay va_display;
+	VAConfigAttrib attrib;
+};
+
+struct drm_va_display *drm_va_create_display(void);
+void drm_va_destroy_display(struct drm_va_display *d);
 
 #ifdef  __cplusplus
 }

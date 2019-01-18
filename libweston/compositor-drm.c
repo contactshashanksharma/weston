@@ -559,6 +559,8 @@ struct drm_output {
 	struct vaapi_recorder *recorder;
 	struct wl_listener recorder_frame_listener;
 
+	struct drm_va_display *va_display;
+
 	struct wl_event_source *pageflip_timer;
 
 	bool virtual;
@@ -6316,6 +6318,9 @@ drm_output_destroy(struct weston_output *base)
 
 	drm_mode_list_destroy(b, &output->base.mode_list);
 
+	if (output->va_display)
+		drm_va_destroy_display(output->va_display);
+
 	if (output->pageflip_timer)
 		wl_event_source_remove(output->pageflip_timer);
 
@@ -6599,6 +6604,11 @@ drm_output_create(struct weston_compositor *compositor, const char *name)
 
 	output->destroy_pending = 0;
 	output->disable_pending = 0;
+
+	/* HDR playback is only on 4k modes */
+	output->va_display = drm_va_create_display();
+	if (!output->va_display)
+		weston_log("Failed to create VA display context\n");
 
 	output->state_cur = drm_output_state_alloc(output, NULL);
 
