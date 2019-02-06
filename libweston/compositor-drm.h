@@ -28,6 +28,9 @@
 #ifndef WESTON_COMPOSITOR_DRM_H
 #define WESTON_COMPOSITOR_DRM_H
 #include <va/va.h>
+#include <va/va_drmcommon.h>
+#include <drm/drm_fourcc.h>
+
 
 #include "compositor.h"
 #include "plugin-registry.h"
@@ -226,6 +229,39 @@ struct weston_drm_backend_config {
 	bool use_pixman_shadow;
 };
 
+enum drm_fb_type {
+	BUFFER_INVALID = 0, /**< never used */
+	BUFFER_CLIENT, /**< directly sourced from client */
+	BUFFER_DMABUF, /**< imported from linux_dmabuf client */
+	BUFFER_PIXMAN_DUMB, /**< internal Pixman rendering */
+	BUFFER_GBM_SURFACE, /**< internal EGL rendering */
+	BUFFER_CURSOR, /**< internal cursor buffer */
+};
+
+struct drm_fb {
+	enum drm_fb_type type;
+
+	int refcnt;
+
+	uint32_t fb_id, size;
+	uint32_t handles[4];
+	uint32_t strides[4];
+	uint32_t offsets[4];
+	int num_planes;
+	const struct pixel_format_info *format;
+	uint64_t modifier;
+	int width, height;
+	int fd;
+	struct weston_buffer_reference buffer_ref;
+
+	/* Used by gbm fbs */
+	struct gbm_bo *bo;
+	struct gbm_surface *gbm_surface;
+
+	/* Used by dumb fbs */
+	void *map;
+};
+
 /* va-hdr.c */
 struct drm_va_display {
 	int render_fd;
@@ -238,10 +274,150 @@ struct drm_va_display {
 	VAConfigID ctx_id;
 	VADisplay va_display;
 	VAConfigAttrib attrib;
+
+	struct drm_backend *b;
 };
 
-struct drm_va_display *drm_va_create_display(void);
+/* EDID's hdr static metadata block to parse */
+struct drm_edid_hdr_metadata_static {
+	uint8_t eotf;
+	uint8_t smd_type_desc;
+	uint8_t max_cll;
+	uint8_t max_cfall;
+	uint8_t min_cll;
+	uint16_t display_primary_r_x;
+	uint16_t display_primary_r_y;
+	uint16_t display_primary_g_x;
+	uint16_t display_primary_g_y;
+	uint16_t display_primary_b_x;
+	uint16_t display_primary_b_y;
+	uint16_t white_point_x;
+	uint16_t white_point_y;
+};
+
+#define weston_log_hdr(fmt, ...) \
+{	\
+	if (tone_map_reqd)	\
+		weston_log_continue(fmt); \
+}
+
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
+
+struct drm_format_name {
+	uint32_t format;
+	char name[128];
+};
+
+static struct drm_format_name format_names[] = {
+	{.format=DRM_FORMAT_C8,.name="FORMAT_C8"},
+	{.format=DRM_FORMAT_R8,.name="FORMAT_R8"},
+	{.format=DRM_FORMAT_R16,.name="FORMAT_R16"},
+	{.format=DRM_FORMAT_RG88,.name="FORMAT_RG88"},
+	{.format=DRM_FORMAT_GR88,.name="FORMAT_GR88"},
+	{.format=DRM_FORMAT_RG1616,.name="FORMAT_RG1616"},
+	{.format=DRM_FORMAT_GR1616,.name="FORMAT_GR1616"},
+	{.format=DRM_FORMAT_RGB332,.name="FORMAT_RGB332"},
+	{.format=DRM_FORMAT_BGR233,.name="FORMAT_BGR233"},
+	{.format=DRM_FORMAT_XRGB4444,.name="FORMAT_XRGB4444"},
+	{.format=DRM_FORMAT_XBGR4444,.name="FORMAT_XBGR4444"},
+	{.format=DRM_FORMAT_RGBX4444,.name="FORMAT_RGBX4444"},
+	{.format=DRM_FORMAT_BGRX4444,.name="FORMAT_BGRX4444"},
+	{.format=DRM_FORMAT_ARGB4444,.name="FORMAT_ARGB4444"},
+	{.format=DRM_FORMAT_ABGR4444,.name="FORMAT_ABGR4444"},
+	{.format=DRM_FORMAT_RGBA4444,.name="FORMAT_RGBA4444"},
+	{.format=DRM_FORMAT_BGRA4444,.name="FORMAT_BGRA4444"},
+	{.format=DRM_FORMAT_XRGB1555,.name="FORMAT_XRGB1555"},
+	{.format=DRM_FORMAT_XBGR1555,.name="FORMAT_XBGR1555"},
+	{.format=DRM_FORMAT_RGBX5551,.name="FORMAT_RGBX5551"},
+	{.format=DRM_FORMAT_BGRX5551,.name="FORMAT_BGRX5551"},
+	{.format=DRM_FORMAT_ARGB1555,.name="FORMAT_ARGB1555"},
+	{.format=DRM_FORMAT_ABGR1555,.name="FORMAT_ABGR1555"},
+	{.format=DRM_FORMAT_RGBA5551,.name="FORMAT_RGBA5551"},
+	{.format=DRM_FORMAT_BGRA5551,.name="FORMAT_BGRA5551"},
+	{.format=DRM_FORMAT_RGB565,.name="FORMAT_RGB565"},
+	{.format=DRM_FORMAT_BGR565,.name="FORMAT_BGR565"},
+	{.format=DRM_FORMAT_RGB888,.name="FORMAT_RGB888"},
+	{.format=DRM_FORMAT_BGR888,.name="FORMAT_BGR888"},
+	{.format=DRM_FORMAT_XRGB8888,.name="FORMAT_XRGB8888"},
+	{.format=DRM_FORMAT_XBGR8888,.name="FORMAT_XBGR8888"},
+	{.format=DRM_FORMAT_RGBX8888,.name="FORMAT_RGBX8888"},
+	{.format=DRM_FORMAT_BGRX8888,.name="FORMAT_BGRX8888"},
+	{.format=DRM_FORMAT_ARGB8888,.name="FORMAT_ARGB8888"},
+	{.format=DRM_FORMAT_ABGR8888,.name="FORMAT_ABGR8888"},
+	{.format=DRM_FORMAT_RGBA8888,.name="FORMAT_RGBA8888"},
+	{.format=DRM_FORMAT_BGRA8888,.name="FORMAT_BGRA8888"},
+	{.format=DRM_FORMAT_XRGB2101010,.name="FORMAT_XRGB2101010"},
+	{.format=DRM_FORMAT_XBGR2101010,.name="FORMAT_XBGR2101010"},
+	{.format=DRM_FORMAT_RGBX1010102,.name="FORMAT_RGBX1010102"},
+	{.format=DRM_FORMAT_BGRX1010102,.name="FORMAT_BGRX1010102"},
+	{.format=DRM_FORMAT_ARGB2101010,.name="FORMAT_ARGB2101010"},
+	{.format=DRM_FORMAT_ABGR2101010,.name="FORMAT_ABGR2101010"},
+	{.format=DRM_FORMAT_RGBA1010102,.name="FORMAT_RGBA1010102"},
+	{.format=DRM_FORMAT_BGRA1010102,.name="FORMAT_BGRA1010102"},
+	{.format=DRM_FORMAT_YUYV,.name="FORMAT_YUYV"},
+	{.format=DRM_FORMAT_YVYU,.name="FORMAT_YVYU"},
+	{.format=DRM_FORMAT_UYVY,.name="FORMAT_UYVY"},
+	{.format=DRM_FORMAT_VYUY,.name="FORMAT_VYUY"},
+	{.format=DRM_FORMAT_AYUV,.name="FORMAT_AYUV"},
+	{.format=DRM_FORMAT_XRGB8888_A8,.name="FORMAT_XRGB8888_A8"},
+	{.format=DRM_FORMAT_XBGR8888_A8,.name="FORMAT_XBGR8888_A8"},
+	{.format=DRM_FORMAT_RGBX8888_A8,.name="FORMAT_RGBX8888_A8"},
+	{.format=DRM_FORMAT_BGRX8888_A8,.name="FORMAT_BGRX8888_A8"},
+	{.format=DRM_FORMAT_RGB888_A8,.name="FORMAT_RGB888_A8"},
+	{.format=DRM_FORMAT_BGR888_A8,.name="FORMAT_BGR888_A8"},
+	{.format=DRM_FORMAT_RGB565_A8,.name="FORMAT_RGB565_A8"},
+	{.format=DRM_FORMAT_BGR565_A8,.name="FORMAT_BGR565_A8"},
+	{.format=DRM_FORMAT_NV12,.name="FORMAT_NV12"},
+	{.format=DRM_FORMAT_NV21,.name="FORMAT_NV21"},
+	{.format=DRM_FORMAT_NV16,.name="FORMAT_NV16"},
+	{.format=DRM_FORMAT_NV61,.name="FORMAT_NV61"},
+	{.format=DRM_FORMAT_NV24,.name="FORMAT_NV24"},
+	{.format=DRM_FORMAT_NV42,.name="FORMAT_NV42"},
+	{.format=DRM_FORMAT_YUV410,.name="FORMAT_YUV410"},
+	{.format=DRM_FORMAT_YVU410,.name="FORMAT_YVU410"},
+	{.format=DRM_FORMAT_YUV411,.name="FORMAT_YUV411"},
+	{.format=DRM_FORMAT_YVU411,.name="FORMAT_YVU411"},
+	{.format=DRM_FORMAT_YUV420,.name="FORMAT_YUV420"},
+	{.format=DRM_FORMAT_YVU420,.name="FORMAT_YVU420"},
+	{.format=DRM_FORMAT_YUV422,.name="FORMAT_YUV422"},
+	{.format=DRM_FORMAT_YVU422,.name="FORMAT_YVU422"},
+	{.format=DRM_FORMAT_YUV444,.name="FORMAT_YUV444"},
+	{.format=DRM_FORMAT_YVU444,.name="FORMAT_YVU444"},
+};
+
+static const char *drm_print_format_name(uint32_t format)
+{
+	uint32_t i;
+
+	for (i = 0; i < ARRAY_SIZE(format_names); i++)
+		if (format == format_names[i].format)
+			return format_names[i].name;
+	return NULL;
+}
+
+/* drm-compositor.c */
+const uint8_t *
+edid_find_extended_data_block(const uint8_t *edid,
+					uint8_t *data_len,
+					uint32_t block_tag);
+struct drm_fb *
+drm_fb_get_from_vasurf(struct drm_va_display *d,
+			VADRMPRIMESurfaceDescriptor *va_desc);
+
+/* drm-hdr-metadata.c */
+struct drm_edid_hdr_metadata_static *
+drm_get_hdr_metadata(const uint8_t *edid, uint32_t edid_len);
+
+void
+drm_release_hdr_metadata(struct drm_edid_hdr_metadata_static *md);
+
+struct drm_va_display *drm_va_create_display(struct drm_backend *b);
 void drm_va_destroy_display(struct drm_va_display *d);
+struct drm_fb *
+drm_va_tone_map(struct drm_va_display *d,
+				struct drm_fb *fb,
+				struct weston_hdr_metadata *content_md,
+				const struct drm_edid_hdr_metadata_static *target_md);
 
 #ifdef  __cplusplus
 }
