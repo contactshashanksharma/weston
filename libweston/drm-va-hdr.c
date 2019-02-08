@@ -134,7 +134,7 @@ static int drm_va_check_entrypoints(struct drm_va_display *d)
 			break;
 
 	if (i == num_entrypoints) {
-		printf("No entry point found\n");
+		weston_log("No entry point found\n");
 		return -1;
 	}
 
@@ -179,7 +179,7 @@ drm_va_init_display(struct drm_va_display *d)
 	va_display = vaGetDisplayWl(d->wl_display);
 #endif
 	if (!va_display) {
-		printf("Can't get DRM display\n");
+		weston_log("Can't get DRM display\n");
 		close(render_fd);
 		return NULL;
 	}
@@ -249,12 +249,108 @@ void drm_va_destroy_display(struct drm_va_display *d)
 	return;
 }
 
+bool va_write_surface_to_frame(VADisplay *d, VASurfaceID surface_id)
+{
+	VAStatus va_status;
+	VAImage  va_image;
+	FILE *fp;
+
+	int i = 0;
+	int frame_size = 0, y_size = 0, u_size = 0;
+	unsigned char *y_src = NULL, *u_src = NULL, *v_src = NULL;
+	unsigned char *y_dst = NULL, *u_dst = NULL, *v_dst = NULL;
+	int bytes_per_pixel = 2;
+	void *in_buf = NULL;
+	unsigned char *dst_buffer = NULL;
+
+	fp = fopen("/home/shashanks/code/clean/frame.a2rgb10", "w");
+	if (fp == NULL) {
+		weston_log("Open failed\n");
+		return -1;
+	}
+
+	// This function blocks until all pending operations on the surface have been completed.
+	va_status = vaSyncSurface(d, surface_id);
+	if (!va_check_status(va_status, "Sync"))
+		return -1;
+
+	va_status = vaDeriveImage(d, surface_id, &va_image);
+	if (!va_check_status(va_status, "Derive"))
+		return -1;
+
+	va_status = vaMapBuffer(d, va_image.buf, &in_buf);
+	if (!va_check_status(va_status, "vaMapBuffer"))
+		return -1;
+
+	weston_log("write_surface_to_frame: va_image.width %d, va_image.height %d, va_image.pitches[0]: %d, va_image.pitches[1] %d, va_image.pitches[2] %d\n", 
+		va_image.width, va_image.height, va_image.pitches[0], va_image.pitches[1], va_image.pitches[1]);    
+
+
+	switch (va_image.format.fourcc) {
+	case VA_FOURCC_P010:
+		frame_size = va_image.width * va_image.height * bytes_per_pixel * 3 / 2;
+		dst_buffer = (unsigned char*)malloc(frame_size);
+		y_size = va_image.width * va_image.height * bytes_per_pixel;
+		u_size = (va_image.width / 2 * bytes_per_pixel) * (va_image.height >> 1);
+		y_dst = dst_buffer;
+		u_dst = dst_buffer + y_size; // UV offset for P010
+		y_src = (unsigned char*)in_buf + va_image.offsets[0];
+		u_src = (unsigned char*)in_buf + va_image.offsets[1]; // U offset for P010    
+
+		for (i = 0; i < va_image.height; i++)  {
+			memcpy(y_dst, y_src, va_image.width * 2);
+			y_dst += va_image.width * 2;
+			y_src += va_image.pitches[0];
+		}
+
+		for (i = 0; i < va_image.height >> 1; i++)  {
+			memcpy(u_dst, u_src, va_image.width * 2);
+			u_dst += va_image.width * 2;
+			u_src += va_image.pitches[1];
+		}
+		weston_log("write_frame: P010 \n");
+		break;
+
+	case VA_FOURCC_RGBA:
+	case VA_FOURCC_ABGR:
+		frame_size = va_image.width * va_image.height * 4;
+		dst_buffer = (unsigned char*)malloc(frame_size);        
+		y_dst = dst_buffer;
+		y_src = (unsigned char*)in_buf + va_image.offsets[0];         
+
+		for (i = 0; i < va_image.height; i++) {
+			memcpy(y_dst, y_src, va_image.width * 4);
+			y_dst += va_image.pitches[0];
+			y_src += va_image.width * 4;
+		} 
+		weston_log("write_frame: RGBA and A2R10G10B10 \n");       
+		break;
+
+	default: // should not come here
+		weston_log("VA_STATUS_ERROR_INVALID_IMAGE_FORMAT %x\n", va_image.format.fourcc);
+		va_status = VA_STATUS_ERROR_INVALID_IMAGE_FORMAT;
+	break;
+	}
+
+	fwrite(dst_buffer, 1, frame_size, fp);
+
+	if (dst_buffer)  {
+		free(dst_buffer);
+		dst_buffer = NULL;
+	}
+
+	vaUnmapBuffer(d, va_image.buf);
+	vaDestroyImage(d, va_image.image_id);
+	return va_status;
+}
+
+
 static struct drm_fb *
 drm_va_create_fb_from_surface(struct drm_va_display *d,
-                        VASurfaceID surface_id)
+                        VASurfaceID surface_id,
+                        VADRMPRIMESurfaceDescriptor *va_desc)
 {
 	VAStatus status;
-	VADRMPRIMESurfaceDescriptor va_desc;
 #if 0
 	uint32_t export_flags = VA_EXPORT_SURFACE_SEPARATE_LAYERS |
 #else
@@ -262,7 +358,7 @@ drm_va_create_fb_from_surface(struct drm_va_display *d,
 #endif
 			VA_EXPORT_SURFACE_READ_ONLY |
 			VA_EXPORT_SURFACE_WRITE_ONLY;
-	
+
 	/* Sync surface before expoting buffer, blocking call */
 	status = vaSyncSurface(d->va_display, surface_id);
 	if (!va_check_status(status, "vaSyncSurface")) {
@@ -270,18 +366,23 @@ drm_va_create_fb_from_surface(struct drm_va_display *d,
 		return NULL;
 	}
 
+	status = va_write_surface_to_frame(d->va_display, surface_id);
+	if (status == VA_STATUS_SUCCESS) {
+		weston_log_continue("VA: saved snapshot\n");
+	}
+
 	/* Get a prime handle of the fb assosiated with surface */
 	status = vaExportSurfaceHandle(d->va_display,
 			surface_id,
 			VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2,
 			export_flags,
-			&va_desc);
+			va_desc);
 	if (!va_check_status(status, "vaExportSurfaceHandle")) {
 		weston_log_continue("VA: Failed to export surface to buffer\n");
 		return NULL;
 	}
 
-	return drm_fb_get_from_vasurf(d, &va_desc);
+	return drm_fb_get_from_vasurf(d, va_desc);
 }
 
 static VASurfaceID
@@ -295,11 +396,11 @@ drm_va_create_surface_from_fb(struct drm_va_display *d,
 	VASurfaceAttribExternalBuffers external;
 	VASurfaceAttrib attribs[2];
 #if 1
+	uint32_t surf_fourcc  = VA_FOURCC('P', '0', '1', '0');
+	uint32_t surf_format  = VA_RT_FORMAT_YUV420;
+#else
 	uint32_t surf_fourcc  = VA_FOURCC_P010;
 	uint32_t surf_format  = VA_RT_FORMAT_YUV420_10;
-#else
-	uint32_t surf_fourcc  = VA_FOURCC('N', 'V', '1', '2');
-	uint32_t surf_format  = VA_FOURCC_P010;
 #endif
 #if 0
 	struct drm_gem_flink arg;
@@ -307,7 +408,7 @@ drm_va_create_surface_from_fb(struct drm_va_display *d,
 	arg.handle = fb->handles[0];
 	ret = drmIoctl(fb->fd, DRM_IOCTL_GEM_FLINK, &arg);
 	if (ret) {
-		printf("VA: drmloctl DRM_IOCTL_GEM_FLINK Failed\n");
+		weston_log("VA: drmloctl DRM_IOCTL_GEM_FLINK Failed\n");
 		return VA_INVALID_SURFACE;
 	}
 	handle = (unsigned long)arg.name;
@@ -333,11 +434,9 @@ drm_va_create_surface_from_fb(struct drm_va_display *d,
 	attribs[0].value.type = VAGenericValueTypeInteger;
 #if 0
 	attribs[0].value.value.i = VA_SURFACE_ATTRIB_MEM_TYPE_KERNEL_DRM;
-	attribs[0].value.value.i = VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME;
 #else
-	attribs[0].value.value.i = VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2;
+	attribs[0].value.value.i = VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME;
 #endif
-
 	attribs[1].flags = VA_SURFACE_ATTRIB_SETTABLE;
 	attribs[1].type = VASurfaceAttribExternalBufferDescriptor;
 	attribs[1].value.type = VAGenericValueTypePointer;
@@ -364,20 +463,28 @@ drm_va_create_surface(struct drm_va_display *d,
     VAStatus va_status;
 	VASurfaceID surface_id;
     VASurfaceAttrib surface_attrib;
-#if 1
-	uint32_t surf_fourcc  = VA_FOURCC_P010;
-	uint32_t surf_format  = VA_RT_FORMAT_YUV420_10;
-#else
-	uint32_t surf_fourcc = VA_FOURCC_RGBA;
-	uint32_t surf_format = VA_RT_FORMAT_RGB32;
-	uint32_t surf_fourcc = VA_FOURCC_RGBA;
-	
-	uint32_t surf_fourcc = VA_FOURCC_RGBX;
+#if 0
+	uint32_t surf_fourcc = VA_FOURCC_XRGB; //Fails vaExportSurfaceHandle
 	uint32_t surf_format = VA_RT_FORMAT_RGB32_10;
 
-	uint32_t surf_fourcc = VA_FOURCC_RGBA;
+	uint32_t surf_fourcc = VA_FOURCC_RGBX; //Fails vaExportSurfaceHandle
+	uint32_t surf_format = VA_RT_FORMAT_RGB32_10;
+
+	uint32_t surf_fourcc = VA_FOURCC_RGBA;//Fails vaExportSurfaceHandle
+	uint32_t surf_format = VA_RT_FORMAT_RGB32;
+
+	uint32_t surf_fourcc  = VA_FOURCC_P010;//Fails vaExportSurfaceHandle
+	uint32_t surf_format  = VA_RT_FORMAT_YUV420_10;
+
+	uint32_t surf_fourcc = VA_FOURCC_ARGB; //Fails vaEndPicture
+	uint32_t surf_format = VA_RT_FORMAT_RGB32_10;
+
+	uint32_t surf_fourcc = VA_FOURCC_RGBA; //Success
 	uint32_t surf_format = VA_RT_FORMAT_RGB32_10;
 #endif
+	uint32_t surf_fourcc = VA_FOURCC_RGBA;
+	uint32_t surf_format = VA_RT_FORMAT_RGB32_10;
+
     surface_attrib.type =  VASurfaceAttribPixelFormat;
     surface_attrib.flags = VA_SURFACE_ATTRIB_SETTABLE;
     surface_attrib.value.type = VAGenericValueTypeInteger;
@@ -410,30 +517,13 @@ drm_va_create_surfaces(struct drm_va_display *d,
 {
 	*surface_in = drm_va_create_surface_from_fb(d, in_fb);
 	if (VA_INVALID_SURFACE == *surface_in) {
-		printf("VA: Failed to create in surface\n");
+		weston_log("VA: Failed to create in surface\n");
 		return -1;
 	}
-#if 0
-
-	*surface_out = drm_va_create_surface_from_fb(d, out_fb);
-	if (VA_INVALID_SURFACE == *surface_out) {
-		printf("VA: Failed to create out surface\n");
-		vaDestroySurfaces(d->va_display, surface_in, 1);
-		*surface_in = VA_INVALID_SURFACE;
-		return -1;
-	}
-
-	*surface_in = drm_va_create_surface(d, in_fb);
-	if (VA_INVALID_SURFACE == *surface_in) {
-		printf("VA: Failed to create in surface\n");
-		return -1;
-	}
-#endif
-
 
 	*surface_out = drm_va_create_surface(d, in_fb->width, in_fb->height);
 	if (VA_INVALID_SURFACE == *surface_out) {
-		printf("VA: Failed to create out surface\n");
+		weston_log("VA: Failed to create out surface\n");
 		vaDestroySurfaces(d->va_display, surface_in, 1);
 		*surface_in = VA_INVALID_SURFACE;
 		return -1;
@@ -446,7 +536,7 @@ drm_va_create_surfaces(struct drm_va_display *d,
 
 static int
 drm_va_process(struct drm_va_display *d,
-				VABufferID pparam_buf_id,
+				VABufferID *pparam_buf_id,
 				VAContextID context_id,
 				VASurfaceID out_surface_id)
 {
@@ -455,20 +545,20 @@ drm_va_process(struct drm_va_display *d,
 	va_status = vaBeginPicture(d->va_display,
                                context_id,
                                out_surface_id);
-    	if (!va_check_status(va_status, "vaBeginPicture"))
+    if (!va_check_status(va_status, "vaBeginPicture"))
 		return -1;
 
 	weston_log_continue("VA: Begin\n");
-    	va_status = vaRenderPicture(d->va_display,
+    va_status = vaRenderPicture(d->va_display,
                                 context_id,
-                                &pparam_buf_id,
+                                pparam_buf_id,
                                 1);
-    	if (!va_check_status(va_status, "vaRenderPicture"))
+    if (!va_check_status(va_status, "vaRenderPicture"))
 		return -1;
 
 	weston_log_continue("VA: Render\n");
-    	va_status = vaEndPicture(d->va_display, context_id);
-    	if (!va_check_status(va_status, "vaEndPicture"))
+    va_status = vaEndPicture(d->va_display, context_id);
+    if (!va_check_status(va_status, "vaEndPicture"))
 		return -1;
 
 	weston_log_continue("VA: surface processing done\n");
@@ -492,18 +582,18 @@ drm_va_setup_surfaces(VARectangle *surface_region,
 
 static int
 drm_va_set_output_tm_metadata(struct weston_hdr_metadata *content_md, 
-				const struct drm_edid_hdr_metadata_static *target_md,
+				const struct drm_hdr_metadata_static *target_md,
 				VAHdrMetaDataHDR10 *o_hdr10_md,
 				VAHdrMetaData *out_metadata)
 {
-	const struct drm_edid_hdr_metadata_static *t_smd;
+	const struct drm_hdr_metadata_static *t_smd;
 	/* TODO: Add support for dynamic metadat too */
 
 	/* SDR target display */
 	if (!target_md) {
 
-	/* Hard coding values to standard SDR libva values */
-	o_hdr10_md->display_primaries_x[0] = 15000;
+		/* Hard coding values to standard SDR libva values */
+		o_hdr10_md->display_primaries_x[0] = 15000;
         o_hdr10_md->display_primaries_y[0] = 30000;
         o_hdr10_md->display_primaries_x[1] = 32000;
         o_hdr10_md->display_primaries_y[1] = 16500;
@@ -519,19 +609,19 @@ drm_va_set_output_tm_metadata(struct weston_hdr_metadata *content_md,
 	}
 
 	t_smd = target_md;
-	o_hdr10_md->max_display_mastering_luminance = t_smd->max_cll;
-	o_hdr10_md->min_display_mastering_luminance = t_smd->min_cll;
-	o_hdr10_md->max_pic_average_light_level = t_smd->max_cfall;
+	o_hdr10_md->max_display_mastering_luminance = t_smd->max_mastering_luminance;
+	o_hdr10_md->min_display_mastering_luminance = t_smd->min_mastering_luminance;
+	o_hdr10_md->max_pic_average_light_level = t_smd->max_fall;
 	o_hdr10_md->max_content_light_level = t_smd->max_cll;
 
 	o_hdr10_md->white_point_x = va_primary(t_smd->white_point_x);
 	o_hdr10_md->white_point_y = va_primary(t_smd->white_point_y);
-	o_hdr10_md->display_primaries_x[0] = va_primary(t_smd->display_primary_g_x);
-	o_hdr10_md->display_primaries_x[1] = va_primary(t_smd->display_primary_b_x);
-	o_hdr10_md->display_primaries_x[2] = va_primary(t_smd->display_primary_r_x);
-	o_hdr10_md->display_primaries_y[0] = va_primary(t_smd->display_primary_g_y);
-	o_hdr10_md->display_primaries_y[1] = va_primary(t_smd->display_primary_b_y);
-	o_hdr10_md->display_primaries_y[2] = va_primary(t_smd->display_primary_r_y);
+	o_hdr10_md->display_primaries_x[0] = va_primary(t_smd->primary_g_x);
+	o_hdr10_md->display_primaries_x[1] = va_primary(t_smd->primary_b_x);
+	o_hdr10_md->display_primaries_x[2] = va_primary(t_smd->primary_r_x);
+	o_hdr10_md->display_primaries_y[0] = va_primary(t_smd->primary_g_y);
+	o_hdr10_md->display_primaries_y[1] = va_primary(t_smd->primary_b_y);
+	o_hdr10_md->display_primaries_y[2] = va_primary(t_smd->primary_r_y);
 
 	out_metadata->metadata_type = VAProcHighDynamicRangeMetadataHDR10;
 	out_metadata->metadata = o_hdr10_md;
@@ -643,6 +733,30 @@ drm_va_create_hdr_filter(struct drm_va_display *d,
 			fparam_buf_id, in_hdr10_md, hdr_tm_param);
 }
 
+uint32_t
+drm_tone_mapping_mode(struct weston_hdr_metadata *content_md,
+		struct drm_edid_hdr_metadata_static *target_md)
+{
+	uint32_t tm_type;
+
+	/* HDR content and HDR display */
+	if (content_md && target_md)
+		tm_type = VA_TONE_MAPPING_HDR_TO_HDR;
+
+	/* HDR content and SDR display */
+	if (content_md && !target_md)
+		tm_type = VA_TONE_MAPPING_HDR_TO_SDR;
+
+	/* SDR content and HDR display */
+	if (!content_md && target_md)
+		tm_type = VA_TONE_MAPPING_SDR_TO_HDR;
+
+	/* SDR content and SDR display */
+	if (!content_md && !target_md)
+		return 0;
+
+	return tm_type;
+}
 
 /*
 * This is a limited tone mapping API in DRM backend, which uses
@@ -662,10 +776,9 @@ struct drm_fb *
 drm_va_tone_map(struct drm_va_display *d,
 		struct drm_fb *fb,
 		struct weston_hdr_metadata *content_md,
-		const struct drm_edid_hdr_metadata_static *target_md)
+		struct drm_tone_map *tm)
 {
 	int ret = 0;
-	uint8_t tm_type;
 	struct drm_fb *out_fb = NULL;
 	VABufferID pparam_buf_id = VA_INVALID_ID;
 	VABufferID fparam_buf_id = VA_INVALID_ID;
@@ -679,51 +792,18 @@ drm_va_tone_map(struct drm_va_display *d,
 	VAHdrMetaDataHDR10 out_md_params = {0, };
 	VAProcPipelineParameterBuffer pparam = {0, };
 	VAProcFilterParameterBufferHDRToneMapping hdr_tm_param = {0, };
+	VADRMPRIMESurfaceDescriptor va_desc;
 	VAStatus va_status = VA_STATUS_SUCCESS;
 
-	if (!fb || !target_md || !d) {
+	if (!d || !fb || !tm) {
 		weston_log_continue("VA: NULL input, VA not initialized ?\n");
 		return NULL;
 	}
 
-	/*
-	* Our tone mapping policy is pretty much to match output display's
-	* capabilities, so here is how we are going to do this:
-	* 
-	*+-------------+------------------------------------+
-	*|Content on   | Display(Sink)| Tone mapping target |
-	*|any surface  |              |                     |
-	*+--------------------------------------------------+
-	*| HDR         | HDR          | Display(H2H)        |
-	*|             |              |                     |
-	*+--------------------------------------------------+
-	*| HDR         | SDR          | Display(H2S)        |
-	*|             |              |                     |
-	*+--------------------------------------------------+
-	*| SDR         | HDR          | Display(S2H)        |
-	*|             |              |                     |
-	*+--------------------------------------------------+
-	*| SDR         | SDR          | No tone mapping     |
-	*|             |              |                     |
-	*+-------------+--------------+---------------------+
-	*/
-
-	/* HDR content and SDR display */
-	if (content_md && !target_md)
-		tm_type = VA_TONE_MAPPING_HDR_TO_SDR;
-
-	/* HDR content and HDR display */
-	if (content_md && target_md)
-		tm_type = VA_TONE_MAPPING_HDR_TO_HDR;
-
-	/* SDR content and HDR display */
-	if (!content_md && target_md)
-		tm_type = VA_TONE_MAPPING_SDR_TO_HDR;
-#if 0
-	/* SDR content and SDR display */
-	if (!content_md && !target_md)
-		return 0;
-#endif
+	if (fb->format->format != DRM_FORMAT_P010) {
+		weston_log("VA: Current implementation supports P010 format only\n");
+		return NULL;
+	}
 
 	ret = drm_va_create_surfaces(d, &in_surface_id, &out_surface_id, fb);
 	if (ret) {
@@ -731,8 +811,8 @@ drm_va_tone_map(struct drm_va_display *d,
 		return NULL;
 	}
 
-	ret = drm_va_create_context(d, &in_surface_id, &context_id, fb->width,
-				    fb->height);
+	ret = drm_va_create_context(d, &in_surface_id, &context_id,
+					fb->width, fb->height);
 	if (ret) {
 		weston_log_continue("VA: Cant create context\n");
 		ret = -1;
@@ -740,8 +820,8 @@ drm_va_tone_map(struct drm_va_display *d,
 	}
 
 	/* Setup input tonemapping buffer filter */
-	va_status  = drm_va_create_hdr_filter(d, content_md, context_id, tm_type,
-		&fparam_buf_id, &in_hdr10_md, &hdr_tm_param);
+	va_status  = drm_va_create_hdr_filter(d, content_md, context_id,
+		tm->tone_map_mode, &fparam_buf_id, &in_hdr10_md, &hdr_tm_param);
 	if (va_status != VA_STATUS_SUCCESS) {
 		weston_log_continue("VA: Can't create HDR filter, tone map failed\n");
 		ret = -1;
@@ -749,7 +829,7 @@ drm_va_tone_map(struct drm_va_display *d,
 	}
 
 	/* Setup output tonemapping properties */
-	ret = drm_va_set_output_tm_metadata(content_md, target_md, &out_md_params,
+	ret = drm_va_set_output_tm_metadata(content_md, &tm->target_md, &out_md_params,
 				&output_metadata);
 	if (ret) {
 		weston_log_continue("VA: Can't setup HDR metadata\n");
@@ -786,7 +866,7 @@ drm_va_tone_map(struct drm_va_display *d,
 		goto clear_filter;
 	}
 
-	ret = drm_va_process(d, pparam_buf_id, context_id, out_surface_id);
+	ret = drm_va_process(d, &pparam_buf_id, context_id, out_surface_id);
 	if (ret < 0) {
 		weston_log_continue("VA: Failed to tone map buffer\n");
 		ret = -1;
@@ -802,10 +882,9 @@ drm_va_tone_map(struct drm_va_display *d,
 		goto clear_filter;
 	}
 #else
-	out_fb = drm_va_create_fb_from_surface(d, out_surface_id);
-	if (!out_fb) {
+	out_fb = drm_va_create_fb_from_surface(d, out_surface_id, &va_desc);
+	if (!out_fb)
 		weston_log_continue("VA: Failed to tone map buffer\n");
-	}
 #endif
 
 	drm_va_destroy_buffer(d->va_display, pparam_buf_id);
@@ -813,6 +892,7 @@ clear_filter:
 	drm_va_destroy_buffer(d->va_display, fparam_buf_id);
 clear_ctx:
 	drm_va_destroy_context(d->va_display, context_id);
+	drm_va_destroy_config(d->va_display, d->cfg_id);
 clear_surf:
 	drm_va_destroy_surface(d->va_display, out_surface_id);
 	drm_va_destroy_surface(d->va_display, in_surface_id);

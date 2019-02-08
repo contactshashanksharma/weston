@@ -278,13 +278,32 @@ struct drm_va_display {
 	struct drm_backend *b;
 };
 
-/* EDID's hdr static metadata block to parse */
+/* Made same as kernel structure */
+struct drm_hdr_metadata_static {
+	uint8_t eotf;
+	uint8_t metadata_type;
+
+	uint16_t primary_r_x;
+	uint16_t primary_r_y;
+	uint16_t primary_g_x;
+	uint16_t primary_g_y;
+	uint16_t primary_b_x;
+	uint16_t primary_b_y;
+	uint16_t white_point_x;
+	uint16_t white_point_y;
+	uint16_t max_mastering_luminance;
+	uint16_t min_mastering_luminance;
+	uint16_t max_fall;
+	uint16_t max_cll;
+};
+
+/* Monitor's HDR metadata */
 struct drm_edid_hdr_metadata_static {
 	uint8_t eotf;
-	uint8_t smd_type_desc;
-	uint8_t max_cll;
-	uint8_t max_cfall;
-	uint8_t min_cll;
+	uint8_t metadata_type;
+	uint8_t desired_max_ll;
+	uint8_t desired_max_fall;
+	uint8_t desired_min_ll;
 	uint16_t display_primary_r_x;
 	uint16_t display_primary_r_y;
 	uint16_t display_primary_g_x;
@@ -295,9 +314,14 @@ struct drm_edid_hdr_metadata_static {
 	uint16_t white_point_y;
 };
 
+struct drm_tone_map {
+	uint8_t tone_map_mode;
+	struct drm_hdr_metadata_static target_md;
+};
+
 #define weston_log_hdr(fmt, ...) \
 {	\
-	if (tone_map_reqd)	\
+	if (ev->surface->hdr_metadata)	\
 		weston_log_continue(fmt); \
 }
 
@@ -307,6 +331,10 @@ struct drm_format_name {
 	uint32_t format;
 	char name[128];
 };
+
+#ifndef DRM_FORMAT_P010
+#define DRM_FORMAT_P010         fourcc_code('P', '0', '1', '0')
+#endif
 
 static struct drm_format_name format_names[] = {
 	{.format=DRM_FORMAT_C8,.name="FORMAT_C8"},
@@ -383,6 +411,7 @@ static struct drm_format_name format_names[] = {
 	{.format=DRM_FORMAT_YVU422,.name="FORMAT_YVU422"},
 	{.format=DRM_FORMAT_YUV444,.name="FORMAT_YUV444"},
 	{.format=DRM_FORMAT_YVU444,.name="FORMAT_YVU444"},
+	{.format=DRM_FORMAT_P010,.name="FORMAT_P010"},
 };
 
 static const char *drm_print_format_name(uint32_t format)
@@ -405,6 +434,16 @@ drm_fb_get_from_vasurf(struct drm_va_display *d,
 			VADRMPRIMESurfaceDescriptor *va_desc);
 
 /* drm-hdr-metadata.c */
+uint32_t
+drm_tone_mapping_mode(struct weston_hdr_metadata *content_md,
+		struct drm_edid_hdr_metadata_static *target_md);
+
+int
+drm_prepare_output_hdr_metadata(struct drm_backend *b,
+		struct weston_hdr_metadata *surface_md,
+		struct drm_edid_hdr_metadata_static *display_md,
+		struct drm_hdr_metadata_static *out_md);
+
 struct drm_edid_hdr_metadata_static *
 drm_get_hdr_metadata(const uint8_t *edid, uint32_t edid_len);
 
@@ -415,9 +454,9 @@ struct drm_va_display *drm_va_create_display(struct drm_backend *b);
 void drm_va_destroy_display(struct drm_va_display *d);
 struct drm_fb *
 drm_va_tone_map(struct drm_va_display *d,
-				struct drm_fb *fb,
-				struct weston_hdr_metadata *content_md,
-				const struct drm_edid_hdr_metadata_static *target_md);
+		struct drm_fb *fb,
+		struct weston_hdr_metadata *content_md,
+		struct drm_tone_map *tm);
 
 #ifdef  __cplusplus
 }
