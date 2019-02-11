@@ -274,7 +274,16 @@ struct drm_va_display {
 	VAConfigID ctx_id;
 	VADisplay va_display;
 	VAConfigAttrib attrib;
-
+#if 1
+	VABufferID pparam_buf_id;
+	VABufferID fparam_buf_id;
+	VASurfaceID output_surf_id;
+	VAHdrMetaData output_metadata;
+	VAHdrMetaDataHDR10 out_md_params;
+	VAHdrMetaDataHDR10 in_hdr10_md;
+	VAProcPipelineParameterBuffer pparam;
+	VAProcFilterParameterBufferHDRToneMapping hdr_tm_param;
+#endif
 	struct drm_backend *b;
 };
 

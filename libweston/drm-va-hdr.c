@@ -55,20 +55,24 @@ va_primary(short val)
 	return result * 50000;
 }
 
-static void drm_va_destroy_context(VADisplay va_display, VAContextID context)
+static void drm_va_destroy_context(VADisplay va_display, VAContextID ctx_id)
 {
 	VAStatus va_status;
 
-	va_status = vaDestroyContext(va_display, context);
-	va_check_status(va_status, "vaDestroyContext");
+	if (ctx_id != VA_INVALID_ID) {
+		va_status = vaDestroyContext(va_display, ctx_id);
+		va_check_status(va_status, "vaDestroyContext");
+	}
 }
 
 static void drm_va_destroy_config(VADisplay va_display, VAConfigID cfg_id)
 {
 	VAStatus va_status;
 
-	va_status = vaDestroyConfig(va_display, cfg_id);
-	va_check_status(va_status, "vaDestroyConfig");
+	if (cfg_id != VA_INVALID_ID) {
+		va_status = vaDestroyConfig(va_display, cfg_id);
+		va_check_status(va_status, "vaDestroyConfig");
+	}
 }
 
 static void drm_va_destroy_buffer(VADisplay dpy,VABufferID buffer_id)
@@ -79,271 +83,21 @@ static void drm_va_destroy_buffer(VADisplay dpy,VABufferID buffer_id)
 	va_check_status(va_status, "vaDestroyBuffer");
 }
 
-static VAContextID
-drm_va_create_context(struct drm_va_display *d,
-				VASurfaceID *surface_id,
-				VAContextID *context_id,
-				int out_w, int out_h)
-{
-	VAStatus va_status;
-
-	/* Create a Video processing Context */
-	va_status = vaCreateContext(d->va_display,
-								d->cfg_id,
-								out_w, out_h, VA_PROGRESSIVE,
-								surface_id, 1, context_id);
-	if (!va_check_status(va_status,"vaCreateContext"))
-		return -1;
-
-	return 0;
-}
-
-static VAConfigID
-drm_va_create_config(struct drm_va_display *d)
-{
-	VAStatus va_status;
-	VAConfigID cfg_id;
-
-	/* Create a video processing config */
-	va_status = vaCreateConfig(d->va_display,
-					VAProfileNone, VAEntrypointVideoProc,
-					&d->attrib, 1, &cfg_id);
-	if (!va_check_status(va_status,"vaCreateConfig"))
-		return VA_INVALID_ID;
-
-	return cfg_id;
-}
-
-static int drm_va_check_entrypoints(struct drm_va_display *d)
-{
-	int i;
-	int32_t num_entrypoints;
-	VAStatus va_status;
-	VAEntrypoint entrypoints[5];
-	VADisplay va_display = d->va_display;
-
-	/* Query supported Entrypoint for video processing, Check whether VPP is supported by driver */
-	num_entrypoints = vaMaxNumEntrypoints(va_display);
-	va_status = vaQueryConfigEntrypoints(va_display, VAProfileNone,
-					entrypoints, &num_entrypoints);
-	if (!va_check_status(va_status,"vaQueryConfigEntrypoints"))
-		return -1;
-
-	for (i = 0; i < num_entrypoints; i++)
-		if (entrypoints[i] == VAEntrypointVideoProc)
-			break;
-
-	if (i == num_entrypoints) {
-		weston_log("No entry point found\n");
-		return -1;
-	}
-
-	return 0;
-}
-
-static int drm_va_check_attributes(struct drm_va_display *d)
-{
-	VAStatus va_status;
-
-	/* Query supported RenderTarget format */
-	d->attrib.type = VAConfigAttribRTFormat;
-	va_status = vaGetConfigAttributes(d->va_display, VAProfileNone,
-				VAEntrypointVideoProc, &d->attrib, 1);
-	if (!va_check_status(va_status,"vaGetConfigAttributes")) {
-		weston_log_continue("VA: failed to get attributes\n");
-		return -1;
-	}
-
-	return 0;
-}
-
-static VADisplay
-drm_va_init_display(struct drm_va_display *d)
-{
-	int render_fd;
-	VAStatus va_status;
-	VADisplay va_display;
-
-	if (!d)
-		return NULL;
-
-#if 1
-	render_fd = open("/dev/dri/renderD128", O_RDWR);
-	if (render_fd < 0) {
-		weston_log_continue("failed to open render device\n");
-		return NULL;
-	}
-	
-	va_display = vaGetDisplayDRM(render_fd);
-#else
-	va_display = vaGetDisplayWl(d->wl_display);
-#endif
-	if (!va_display) {
-		weston_log("Can't get DRM display\n");
-		close(render_fd);
-		return NULL;
-	}
-
-	va_status = vaInitialize(va_display, &d->major_ver,
-				&d->minor_ver);
-	if (!va_check_status(va_status,"vaInitialize")) {
-		close(render_fd);
-		return NULL;
-	}
-
-	d->render_fd = render_fd;
-	return va_display;
-}
-
-struct drm_va_display *
-drm_va_create_display(struct drm_backend *backend)
-{
-	struct drm_va_display *d;
-
-	d = malloc(sizeof(struct drm_va_display));
-	if (!d) {
-		weston_log_continue("OOM va init\n");
-		return NULL;
-	}
-
-	d->b = backend;
-
-	d->va_display = drm_va_init_display(d);
-	if (!d->va_display) {
-		weston_log_continue("VA: Init failed\n");
-		free(d);
-		return NULL;
-	}
-
-	if (drm_va_check_entrypoints(d)) {
-		weston_log_continue("VA: Entry point check failed\n");
-		free(d);
-		return NULL;
-	}
-
-	if (drm_va_check_attributes(d)) {
-		weston_log_continue("VA: Attribute check failed\n");
-		free(d);
-		return NULL;
-	}
-
-	d->cfg_id = drm_va_create_config(d);
-	if (d->cfg_id == VA_INVALID_ID) {
-		weston_log_continue("VA: Cant create config\n");
-		free(d);
-		return NULL;
-	}
-
-	weston_log_continue("VA: Successfully created display config\n");
-	return d;
-}
-
 void drm_va_destroy_display(struct drm_va_display *d)
 {
-	VAStatus status;
-
-	status = vaDestroyConfig(d->va_display, d->cfg_id);
-	if (!va_check_status(status,"vaDestroyConfig"))
-		weston_log_continue("VA: Can't destroy config\n");
+	if (d->pparam_buf_id != VA_INVALID_ID)
+		drm_va_destroy_surface(d->va_display, d->output_surf_id);
+	if (d->pparam_buf_id != VA_INVALID_ID)
+		drm_va_destroy_buffer(d->va_display, d->pparam_buf_id);
+	if (d->cfg_id != VA_INVALID_ID)
+		drm_va_destroy_config(d->va_display, d->cfg_id);
+	if (d->ctx_id != VA_INVALID_ID)
+		drm_va_destroy_context(d->va_display, d->ctx_id);
+	vaTerminate(d->va_display);
 	close(d->render_fd);
+	free(d);
 	return;
 }
-
-bool va_write_surface_to_frame(VADisplay *d, VASurfaceID surface_id)
-{
-	VAStatus va_status;
-	VAImage  va_image;
-	FILE *fp;
-
-	int i = 0;
-	int frame_size = 0, y_size = 0, u_size = 0;
-	unsigned char *y_src = NULL, *u_src = NULL, *v_src = NULL;
-	unsigned char *y_dst = NULL, *u_dst = NULL, *v_dst = NULL;
-	int bytes_per_pixel = 2;
-	void *in_buf = NULL;
-	unsigned char *dst_buffer = NULL;
-
-	fp = fopen("/home/shashanks/code/clean/frame.a2rgb10", "w");
-	if (fp == NULL) {
-		weston_log("Open failed\n");
-		return -1;
-	}
-
-	// This function blocks until all pending operations on the surface have been completed.
-	va_status = vaSyncSurface(d, surface_id);
-	if (!va_check_status(va_status, "Sync"))
-		return -1;
-
-	va_status = vaDeriveImage(d, surface_id, &va_image);
-	if (!va_check_status(va_status, "Derive"))
-		return -1;
-
-	va_status = vaMapBuffer(d, va_image.buf, &in_buf);
-	if (!va_check_status(va_status, "vaMapBuffer"))
-		return -1;
-
-	weston_log("write_surface_to_frame: va_image.width %d, va_image.height %d, va_image.pitches[0]: %d, va_image.pitches[1] %d, va_image.pitches[2] %d\n", 
-		va_image.width, va_image.height, va_image.pitches[0], va_image.pitches[1], va_image.pitches[1]);    
-
-
-	switch (va_image.format.fourcc) {
-	case VA_FOURCC_P010:
-		frame_size = va_image.width * va_image.height * bytes_per_pixel * 3 / 2;
-		dst_buffer = (unsigned char*)malloc(frame_size);
-		y_size = va_image.width * va_image.height * bytes_per_pixel;
-		u_size = (va_image.width / 2 * bytes_per_pixel) * (va_image.height >> 1);
-		y_dst = dst_buffer;
-		u_dst = dst_buffer + y_size; // UV offset for P010
-		y_src = (unsigned char*)in_buf + va_image.offsets[0];
-		u_src = (unsigned char*)in_buf + va_image.offsets[1]; // U offset for P010    
-
-		for (i = 0; i < va_image.height; i++)  {
-			memcpy(y_dst, y_src, va_image.width * 2);
-			y_dst += va_image.width * 2;
-			y_src += va_image.pitches[0];
-		}
-
-		for (i = 0; i < va_image.height >> 1; i++)  {
-			memcpy(u_dst, u_src, va_image.width * 2);
-			u_dst += va_image.width * 2;
-			u_src += va_image.pitches[1];
-		}
-		weston_log("write_frame: P010 \n");
-		break;
-
-	case VA_FOURCC_RGBA:
-	case VA_FOURCC_ABGR:
-		frame_size = va_image.width * va_image.height * 4;
-		dst_buffer = (unsigned char*)malloc(frame_size);        
-		y_dst = dst_buffer;
-		y_src = (unsigned char*)in_buf + va_image.offsets[0];         
-
-		for (i = 0; i < va_image.height; i++) {
-			memcpy(y_dst, y_src, va_image.width * 4);
-			y_dst += va_image.pitches[0];
-			y_src += va_image.width * 4;
-		} 
-		weston_log("write_frame: RGBA and A2R10G10B10 \n");       
-		break;
-
-	default: // should not come here
-		weston_log("VA_STATUS_ERROR_INVALID_IMAGE_FORMAT %x\n", va_image.format.fourcc);
-		va_status = VA_STATUS_ERROR_INVALID_IMAGE_FORMAT;
-	break;
-	}
-
-	fwrite(dst_buffer, 1, frame_size, fp);
-
-	if (dst_buffer)  {
-		free(dst_buffer);
-		dst_buffer = NULL;
-	}
-
-	vaUnmapBuffer(d, va_image.buf);
-	vaDestroyImage(d, va_image.image_id);
-	return va_status;
-}
-
 
 static struct drm_fb *
 drm_va_create_fb_from_surface(struct drm_va_display *d,
@@ -364,11 +118,6 @@ drm_va_create_fb_from_surface(struct drm_va_display *d,
 	if (!va_check_status(status, "vaSyncSurface")) {
 		weston_log_continue("VA: Failed to sync surface to buffer\n");
 		return NULL;
-	}
-
-	status = va_write_surface_to_frame(d->va_display, surface_id);
-	if (status == VA_STATUS_SUCCESS) {
-		weston_log_continue("VA: saved snapshot\n");
 	}
 
 	/* Get a prime handle of the fb assosiated with surface */
@@ -402,23 +151,13 @@ drm_va_create_surface_from_fb(struct drm_va_display *d,
 	uint32_t surf_fourcc  = VA_FOURCC_P010;
 	uint32_t surf_format  = VA_RT_FORMAT_YUV420_10;
 #endif
-#if 0
-	struct drm_gem_flink arg;
-	memset(&arg, 0, sizeof(arg));
-	arg.handle = fb->handles[0];
-	ret = drmIoctl(fb->fd, DRM_IOCTL_GEM_FLINK, &arg);
-	if (ret) {
-		weston_log("VA: drmloctl DRM_IOCTL_GEM_FLINK Failed\n");
-		return VA_INVALID_SURFACE;
-	}
-	handle = (unsigned long)arg.name;
-#else
+
 	ret = drmPrimeHandleToFD(fb->fd, fb->handles[0], DRM_CLOEXEC, &prime_fd);
 	if (ret) {
-		weston_log_continue("VA: drmloctl get prime handle Failed\n");
+		weston_log("VA: drmloctl get prime handle Failed\n");
 		return VA_INVALID_SURFACE;
 	}
-#endif
+
 	memset(&external, 0, sizeof(external));
 	external.pixel_format = surf_fourcc;
 	external.width = fb->width;
@@ -432,11 +171,7 @@ drm_va_create_surface_from_fb(struct drm_va_display *d,
 	attribs[0].flags = VA_SURFACE_ATTRIB_SETTABLE;
 	attribs[0].type = VASurfaceAttribMemoryType;
 	attribs[0].value.type = VAGenericValueTypeInteger;
-#if 0
-	attribs[0].value.value.i = VA_SURFACE_ATTRIB_MEM_TYPE_KERNEL_DRM;
-#else
 	attribs[0].value.value.i = VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME;
-#endif
 	attribs[1].flags = VA_SURFACE_ATTRIB_SETTABLE;
 	attribs[1].type = VASurfaceAttribExternalBufferDescriptor;
 	attribs[1].value.type = VAGenericValueTypePointer;
@@ -447,11 +182,11 @@ drm_va_create_surface_from_fb(struct drm_va_display *d,
 					&surface, 1, attribs,
 					ARRAY_SIZE(attribs));
 	if (!va_check_status(va_status, "vaCreateSurfaces")) {
-		weston_log_continue("VA: failed to create surface\n");
+		weston_log("VA: failed to create surface\n");
 		return VA_INVALID_SURFACE;
 	}
 
-	weston_log_continue("VA: Created input surface 0x%x, drm format 0x%x fourcc %s\n",
+	weston_log("VA: Created input surface 0x%x, drm format 0x%x fourcc %s\n",
 		surface, VA_FOURCC_P010, drm_print_format_name(surf_fourcc));
 	return surface;
 }
@@ -507,62 +242,6 @@ drm_va_create_surface(struct drm_va_display *d,
 	weston_log_continue("VA: Created output surface 0x%x, format %x fourcc %s\n",
 		surface_id, surf_format, drm_print_format_name(surf_fourcc));
 	return surface_id;
-}
-
-static int
-drm_va_create_surfaces(struct drm_va_display *d,
-					VASurfaceID *surface_in,
-					VASurfaceID *surface_out,
-					struct drm_fb *in_fb)
-{
-	*surface_in = drm_va_create_surface_from_fb(d, in_fb);
-	if (VA_INVALID_SURFACE == *surface_in) {
-		weston_log("VA: Failed to create in surface\n");
-		return -1;
-	}
-
-	*surface_out = drm_va_create_surface(d, in_fb->width, in_fb->height);
-	if (VA_INVALID_SURFACE == *surface_out) {
-		weston_log("VA: Failed to create out surface\n");
-		vaDestroySurfaces(d->va_display, surface_in, 1);
-		*surface_in = VA_INVALID_SURFACE;
-		return -1;
-	}
-
-	weston_log_continue("Shashank: in_surf_id:0x%x out_surf_id:0x%x\n",
-			*surface_in, *surface_out);
-	return 0;
-}
-
-static int
-drm_va_process(struct drm_va_display *d,
-				VABufferID *pparam_buf_id,
-				VAContextID context_id,
-				VASurfaceID out_surface_id)
-{
-	VAStatus va_status;
-
-	va_status = vaBeginPicture(d->va_display,
-                               context_id,
-                               out_surface_id);
-    if (!va_check_status(va_status, "vaBeginPicture"))
-		return -1;
-
-	weston_log_continue("VA: Begin\n");
-    va_status = vaRenderPicture(d->va_display,
-                                context_id,
-                                pparam_buf_id,
-                                1);
-    if (!va_check_status(va_status, "vaRenderPicture"))
-		return -1;
-
-	weston_log_continue("VA: Render\n");
-    va_status = vaEndPicture(d->va_display, context_id);
-    if (!va_check_status(va_status, "vaEndPicture"))
-		return -1;
-
-	weston_log_continue("VA: surface processing done\n");
-	return 0;
 }
 
 static void
@@ -632,13 +311,13 @@ drm_va_set_output_tm_metadata(struct weston_hdr_metadata *content_md,
 static VAStatus
 drm_va_create_input_tm_filter(struct drm_va_display *d,
 					struct weston_hdr_metadata *c_md,
-					VAContextID context_id,
-					uint8_t tm_type,
-					VABufferID *fparam_buf_id,
-					VAHdrMetaDataHDR10 *in_hdr10_md,
-					VAProcFilterParameterBufferHDRToneMapping *hdr_tm_param)
+					uint8_t tm_type)
 {
     VAStatus va_status = VA_STATUS_ERROR_INVALID_VALUE;
+	VAContextID context_id = d->ctx_id;
+	VABufferID *fparam_buf_id = &d->fparam_buf_id;
+	VAHdrMetaDataHDR10 *in_hdr10_md =  &d->in_hdr10_md;
+	VAProcFilterParameterBufferHDRToneMapping *hdr_tm_param = &d->hdr_tm_param;
 	struct weston_hdr_metadata_static *s;
 
 	switch (tm_type) {
@@ -697,22 +376,54 @@ drm_va_create_input_tm_filter(struct drm_va_display *d,
 	return VA_STATUS_SUCCESS;
 }
 
+static void
+drm_va_init_hdr_buffers(struct drm_va_display *d)
+{
+	memset(&d->out_md_params, 0, sizeof(d->out_md_params));
+	memset(&d->in_hdr10_md, 0, sizeof(d->in_hdr10_md));
+	memset(&d->hdr_tm_param, 0, sizeof(d->hdr_tm_param));
+	memset(&d->output_metadata, 0, sizeof(d->output_metadata));
+}
+
+static int
+drm_va_create_pipeline_buffer(struct drm_va_display *d)
+{
+	VAStatus va_status;
+	VAProcPipelineParameterBuffer *pparam = &d->pparam;
+
+	memset(&d->pparam, 0, sizeof(d->pparam));
+	pparam->input_color_properties.colour_primaries = 9;
+	pparam->input_color_properties.transfer_characteristics = 16;
+	pparam->output_color_properties.colour_primaries = 9;
+	pparam->output_color_properties.transfer_characteristics = 16;
+	pparam->output_color_standard = VAProcColorStandardExplicit;
+	pparam->surface_color_standard = VAProcColorStandardExplicit;
+	pparam->output_hdr_metadata = &d->output_metadata;
+
+	/* Create pipeline buffer */
+	va_status = vaCreateBuffer(d->va_display, d->ctx_id,
+				   VAProcPipelineParameterBufferType,
+				   sizeof(VAProcPipelineParameterBuffer),
+				   1, &pparam, &d->pparam_buf_id);
+	if (!va_check_status(va_status, "vaCreateBuffer")) {
+		weston_log_continue("VA: Failed to create pipeline buffer\n");
+		return -1;
+	}
+
+	return 0;
+}
 
 static VAStatus
 drm_va_create_hdr_filter(struct drm_va_display *d,
 			struct weston_hdr_metadata *c_md,
-			VAContextID context_id,
-			uint8_t tm_type,
-			VABufferID *fparam_buf_id,
-			VAHdrMetaDataHDR10 *in_hdr10_md,
-			VAProcFilterParameterBufferHDRToneMapping *hdr_tm_param)
+			uint8_t tm_type)
 {
 	uint32_t i;
 	VAStatus va_status;
+	VAContextID context_id = d->ctx_id;
 	uint32_t num_hdr_tm_caps = VAProcHighDynamicRangeMetadataTypeCount;
 	VAProcFilterCapHighDynamicRange hdr_tm_caps[num_hdr_tm_caps];
 
-#if 1
 	memset(hdr_tm_caps, 0, num_hdr_tm_caps *
 			sizeof(VAProcFilterCapHighDynamicRange));
 	va_status = vaQueryVideoProcFilterCaps(d->va_display, context_id,
@@ -728,9 +439,8 @@ drm_va_create_hdr_filter(struct drm_va_display *d,
 		weston_log_continue("VA: tm caps[%d]: metadata type %d, flag %d\n", i,
 			hdr_tm_caps[i].metadata_type, hdr_tm_caps[i].caps_flag);
 	}
-#endif
-	return drm_va_create_input_tm_filter(d, c_md, context_id, tm_type,
-			fparam_buf_id, in_hdr10_md, hdr_tm_param);
+
+	return drm_va_create_input_tm_filter(d, c_md, tm_type);
 }
 
 uint32_t
@@ -758,6 +468,67 @@ drm_tone_mapping_mode(struct weston_hdr_metadata *content_md,
 	return tm_type;
 }
 
+static VAStatus
+drm_va_process_buffer(struct drm_va_display *d,
+	const VARectangle *surface_region,
+	const VARectangle *output_region,
+	VASurfaceID in_surf_id,
+	VASurfaceID out_surf_id)
+{
+	VAProcPipelineParameterBuffer *pipeline_param;
+	VAStatus status;
+
+	status = vaMapBuffer(d->va_display, d->pparam_buf_id,
+				(void **) &pipeline_param);
+	if (!va_check_status(status, "vaMapBuffer")) {
+		weston_log("VA: failed to remap pipeline buffer\n");
+		return status;
+	}
+
+	memset(pipeline_param, 0, sizeof *pipeline_param);
+	pipeline_param->filter_flags = 0;
+	pipeline_param->surface = in_surf_id;
+	pipeline_param->num_filters = 1;
+	pipeline_param->filters = &d->fparam_buf_id;
+	pipeline_param->surface_region = surface_region;
+	pipeline_param->output_region = output_region;
+
+	pipeline_param->input_color_properties.colour_primaries = 9;
+	pipeline_param->input_color_properties.transfer_characteristics = 16;
+	pipeline_param->output_color_properties.colour_primaries = 9;
+	pipeline_param->output_color_properties.transfer_characteristics = 16;
+	pipeline_param->output_color_standard = VAProcColorStandardExplicit;
+	pipeline_param->surface_color_standard = VAProcColorStandardExplicit;
+	pipeline_param->output_hdr_metadata = &d->output_metadata;
+
+	status = vaUnmapBuffer(d->va_display, d->pparam_buf_id);
+	if (!va_check_status(status, "vaUnMapBuffer")) {
+		weston_log("VA: failed to re-unmap pipeline buffer\n");
+		return status;
+	}
+
+	status = vaBeginPicture(d->va_display, d->ctx_id, out_surf_id);
+	if (!va_check_status(status, "vaBeginPicture")) {
+		weston_log("VA: failed vaBegin\n");
+		return status;
+	}
+
+	status = vaRenderPicture(d->va_display, d->ctx_id, &d->pparam_buf_id, 1);
+	if (!va_check_status(status, "vaRenderPicture")) {
+		weston_log("VA: failed vaRender\n");
+		return status;
+	}
+
+	status = vaEndPicture(d->va_display, d->ctx_id);
+	if (!va_check_status(status, "vaEndPicture")) {
+		weston_log("VA: failed vaEnd\n");
+		return status;
+	}
+
+	weston_log("VA: Success: processing\n");
+	return status;
+}
+
 /*
 * This is a limited tone mapping API in DRM backend, which uses
 * libVA's tone mapping infrastructure, and maps a SDR input buffer
@@ -779,21 +550,12 @@ drm_va_tone_map(struct drm_va_display *d,
 		struct drm_tone_map *tm)
 {
 	int ret = 0;
-	struct drm_fb *out_fb = NULL;
-	VABufferID pparam_buf_id = VA_INVALID_ID;
-	VABufferID fparam_buf_id = VA_INVALID_ID;
-	VASurfaceID in_surface_id = VA_INVALID_SURFACE;
-	VASurfaceID out_surface_id = VA_INVALID_SURFACE;
-	VAContextID context_id = VA_INVALID_ID;
-	VARectangle surface_region = {0, };
-	VARectangle output_region = {0, };
-	VAHdrMetaData output_metadata = {0, };
-	VAHdrMetaDataHDR10 in_hdr10_md = {0, };
-	VAHdrMetaDataHDR10 out_md_params = {0, };
-	VAProcPipelineParameterBuffer pparam = {0, };
-	VAProcFilterParameterBufferHDRToneMapping hdr_tm_param = {0, };
-	VADRMPRIMESurfaceDescriptor va_desc;
 	VAStatus va_status = VA_STATUS_SUCCESS;
+	VASurfaceID in_surface_id = VA_INVALID_SURFACE;
+	VARectangle surface_region = {0,};
+	VARectangle output_region = {0,};
+	VADRMPRIMESurfaceDescriptor va_desc = {0,};
+	struct drm_fb *out_fb = NULL;
 
 	if (!d || !fb || !tm) {
 		weston_log_continue("VA: NULL input, VA not initialized ?\n");
@@ -805,96 +567,226 @@ drm_va_tone_map(struct drm_va_display *d,
 		return NULL;
 	}
 
-	ret = drm_va_create_surfaces(d, &in_surface_id, &out_surface_id, fb);
-	if (ret) {
-		weston_log_continue("VA: Can't create surface, tone map failed\n");
-		return NULL;
-	}
-
-	ret = drm_va_create_context(d, &in_surface_id, &context_id,
-					fb->width, fb->height);
-	if (ret) {
-		weston_log_continue("VA: Cant create context\n");
-		ret = -1;
+	in_surface_id = drm_va_create_surface_from_fb(d, fb);
+	if (VA_INVALID_SURFACE == in_surface_id) {
+		weston_log("VA: Failed to create input surface\n");
 		goto clear_surf;
 	}
 
 	/* Setup input tonemapping buffer filter */
-	va_status  = drm_va_create_hdr_filter(d, content_md, context_id,
-		tm->tone_map_mode, &fparam_buf_id, &in_hdr10_md, &hdr_tm_param);
+	va_status  = drm_va_create_hdr_filter(d, content_md, tm->tone_map_mode);
 	if (va_status != VA_STATUS_SUCCESS) {
-		weston_log_continue("VA: Can't create HDR filter, tone map failed\n");
+		weston_log("VA: Can't create HDR filter, tone map failed\n");
 		ret = -1;
-		goto clear_ctx;
+		goto clear_surf;
 	}
 
 	/* Setup output tonemapping properties */
-	ret = drm_va_set_output_tm_metadata(content_md, &tm->target_md, &out_md_params,
-				&output_metadata);
+	ret = drm_va_set_output_tm_metadata(content_md, &tm->target_md, &d->out_md_params,
+				&d->output_metadata);
 	if (ret) {
-		weston_log_continue("VA: Can't setup HDR metadata\n");
+		weston_log("VA: Can't setup HDR metadata\n");
 		ret = -1;
-		goto clear_ctx;
+		goto clear_buf;
 	}
 
+	/* Steup target rectangles */
 	drm_va_setup_surfaces(&surface_region, &output_region, fb);
 
-	/* Prepare tone mapping pipeline */
-	pparam.filter_flags = 0;
-	pparam.surface = in_surface_id;
-	pparam.num_filters = 1;
-	pparam.filters = &fparam_buf_id;
-	pparam.surface_region = &surface_region;
-	pparam.output_region = &output_region;
-
-	pparam.input_color_properties.colour_primaries = 9;
-	pparam.input_color_properties.transfer_characteristics = 16;
-	pparam.output_color_properties.colour_primaries = 9;
-	pparam.output_color_properties.transfer_characteristics = 16;
-	pparam.output_color_standard = VAProcColorStandardExplicit;
-	pparam.surface_color_standard = VAProcColorStandardExplicit;
-	pparam.output_hdr_metadata = &output_metadata;
-
-	/* Create pipeline buffer */
-	va_status = vaCreateBuffer(d->va_display, context_id,
-				   VAProcPipelineParameterBufferType,
-				   sizeof(VAProcPipelineParameterBuffer),
-				   1, &pparam, &pparam_buf_id);
-	if (!va_check_status(va_status, "vaCreateBuffer")) {
-		weston_log_continue("VA: Failed to create pparam buffer\n");
-		ret = -1;
-		goto clear_filter;
+	/* Do the actual magic */
+	va_status = drm_va_process_buffer(d, &surface_region, &output_region,
+		in_surface_id, d->output_surf_id);
+	if (va_status != VA_STATUS_SUCCESS) {
+		weston_log("VA: failed to process tone mapping buffer\n");
+		goto clear_buf;
 	}
 
-	ret = drm_va_process(d, &pparam_buf_id, context_id, out_surface_id);
-	if (ret < 0) {
-		weston_log_continue("VA: Failed to tone map buffer\n");
-		ret = -1;
-		goto clear_filter;
-	}
-
-#if 0
-	struct wl_buffer *out_buffer = NULL;
-	va_status = vaGetSurfaceBufferWl(d->va_display, out_surface_id, 0, &out_buffer);
-	if (!va_check_status(va_status, "vaGetSurfaceBufferWl")) {
-		weston_log_continue("Failed to get wl buffer\n");
-		ret = -1;
-		goto clear_filter;
-	}
-#else
-	out_fb = drm_va_create_fb_from_surface(d, out_surface_id, &va_desc);
+	/* Get a drm buffer from tone mapped buffer */
+	out_fb = drm_va_create_fb_from_surface(d, d->output_surf_id, &va_desc);
 	if (!out_fb)
-		weston_log_continue("VA: Failed to tone map buffer\n");
-#endif
+		weston_log("VA: Failed to tone map buffer\n");
 
-	drm_va_destroy_buffer(d->va_display, pparam_buf_id);
-clear_filter:
-	drm_va_destroy_buffer(d->va_display, fparam_buf_id);
-clear_ctx:
-	drm_va_destroy_context(d->va_display, context_id);
-	drm_va_destroy_config(d->va_display, d->cfg_id);
+clear_buf:
+	drm_va_destroy_buffer(d->va_display, d->fparam_buf_id);
 clear_surf:
-	drm_va_destroy_surface(d->va_display, out_surface_id);
 	drm_va_destroy_surface(d->va_display, in_surface_id);
 	return out_fb;
 }
+
+static VAContextID
+drm_va_create_context_nosurf(struct drm_va_display *d,
+				VASurfaceID *surface_id,
+				VAContextID *context_id,
+				int out_w, int out_h)
+{
+	VAStatus va_status;
+
+	/* Create a Video processing Context */
+	va_status = vaCreateContext(d->va_display,
+								d->cfg_id,
+								out_w, out_h, 0,
+								NULL, 0, context_id);
+
+	if (!va_check_status(va_status,"vaCreateContext"))
+		return -1;
+	return 0;
+}
+
+static int
+drm_va_create_config(struct drm_va_display *d)
+{
+	VAStatus va_status;
+	VAConfigID cfg_id;
+
+	/* Create a video processing config */
+	va_status = vaCreateConfig(d->va_display,
+					VAProfileNone, VAEntrypointVideoProc,
+					&d->attrib, 1, &cfg_id);
+	if (!va_check_status(va_status,"vaCreateConfig"))
+		return -1;
+
+	d->cfg_id = cfg_id;
+	return 0;
+}
+
+static int drm_va_check_entrypoints(struct drm_va_display *d)
+{
+	int i;
+	int32_t num_entrypoints;
+	VAStatus va_status;
+	VAEntrypoint entrypoints[5];
+	VADisplay va_display = d->va_display;
+
+	/* Query supported Entrypoint for video processing, Check whether VPP is supported by driver */
+	num_entrypoints = vaMaxNumEntrypoints(va_display);
+	va_status = vaQueryConfigEntrypoints(va_display, VAProfileNone,
+					entrypoints, &num_entrypoints);
+	if (!va_check_status(va_status,"vaQueryConfigEntrypoints"))
+		return -1;
+
+	for (i = 0; i < num_entrypoints; i++)
+		if (entrypoints[i] == VAEntrypointVideoProc)
+			break;
+
+	if (i == num_entrypoints) {
+		weston_log("No entry point found\n");
+		return -1;
+	}
+
+	return 0;
+}
+
+static int drm_va_check_attributes(struct drm_va_display *d)
+{
+	VAStatus va_status;
+
+	/* Query supported RenderTarget format */
+	d->attrib.type = VAConfigAttribRTFormat;
+	va_status = vaGetConfigAttributes(d->va_display, VAProfileNone,
+				VAEntrypointVideoProc, &d->attrib, 1);
+	if (!va_check_status(va_status,"vaGetConfigAttributes")) {
+		weston_log_continue("VA: failed to get attributes\n");
+		return -1;
+	}
+
+	return 0;
+}
+
+static int
+drm_va_init_display(struct drm_va_display *d)
+{
+	int render_fd;
+	VAStatus va_status;
+	VADisplay va_display;
+
+	if (!d)
+		return -1;
+
+	render_fd = open("/dev/dri/renderD128", O_RDWR);
+	if (render_fd < 0) {
+		weston_log_continue("failed to open render device\n");
+		return -1;
+	}
+	
+	va_display = vaGetDisplayDRM(render_fd);
+	if (!va_display) {
+		weston_log("Can't get DRM display\n");
+		close(render_fd);
+		return -1;
+	}
+
+	va_status = vaInitialize(va_display, &d->major_ver,
+				&d->minor_ver);
+	if (!va_check_status(va_status,"vaInitialize")) {
+		close(render_fd);
+		return -1;
+	}
+
+	d->render_fd = render_fd;
+	d->va_display = va_display;
+	return 0;
+}
+
+struct drm_va_display *
+drm_va_create_display(struct drm_backend *backend)
+{
+	struct drm_va_display *d;
+
+	d = malloc(sizeof(struct drm_va_display));
+	if (!d) {
+		weston_log_continue("OOM va init\n");
+		return NULL;
+	}
+
+	d->b = backend;
+	d->ctx_id = VA_INVALID_ID;
+	d->cfg_id = VA_INVALID_ID;
+	d->pparam_buf_id = VA_INVALID_ID;
+	d->fparam_buf_id = VA_INVALID_ID;
+
+	if (drm_va_init_display(d)) {
+		weston_log_continue("VA: Init failed\n");
+		free(d);
+		return NULL;
+	}
+
+	if (drm_va_check_entrypoints(d)) {
+		weston_log_continue("VA: Entry point check failed\n");
+		goto error;
+	}
+
+	if (drm_va_check_attributes(d)) {
+		weston_log_continue("VA: Attribute check failed\n");
+		goto error;
+	}
+
+	if (drm_va_create_config(d)) {
+		weston_log_continue("VA: Cant create config\n");
+		goto error;
+	}
+
+	if (drm_va_create_context_nosurf(d, NULL, &d->ctx_id, 3840, 2160)) {
+		weston_log_continue("VA: Can't create config\n");
+		goto error;
+	}
+
+	if (drm_va_create_pipeline_buffer(d)) {
+		weston_log_continue("VA: Can't create config\n");
+		goto error;
+	}
+
+	d->output_surf_id = drm_va_create_surface(d, 3840, 2160);
+	if (d->output_surf_id == VA_INVALID_ID) {
+		weston_log_continue("VA: Can't create output surface\n");
+		goto error;
+	}
+
+	drm_va_init_hdr_buffers(d);
+	weston_log_continue("VA: Successfully created initial display config\n");
+	return d;
+
+error:
+	drm_va_destroy_display(d);
+	return NULL;
+}
+
