@@ -1,6 +1,6 @@
 /*
- * Copyright Â© 2019 Harish Krupo
- * Copyright Â© 2019 Intel Corporation
+ * Copyright © 2019 Harish Krupo
+ * Copyright © 2019 Intel Corporation
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -406,6 +406,8 @@ ensure_hdr_surface(struct app *app)
 {
 	struct window *window = app->window;
 	struct wl_surface *surface;
+
+	assert(app->hdr_metadata);
 	if (app->hdr_surface)
 		return;
 
@@ -489,14 +491,51 @@ video_next_buffer(struct video *s)
 }
 
 static void
+copy_420p10_to_p010(struct buffer *buffer, AVFrame *frame)
+{
+#define SCALE(x) 65535.0f * x / 1023.0f
+	int height, linesize;
+	uint16_t *yplane, *dsty, *uplane, *vplane, *dstuv;
+
+	// copy plane 0
+	height = buffer->height;
+	yplane = (uint16_t *) frame->data[0];
+	dsty = (uint16_t *) buffer->mmap;
+	linesize = frame->linesize[0];
+	int size = (linesize * height) / 2;
+
+	//XXX:TODO Separate input and output stride
+	for (int i = 0; i < size; i++) {
+		dsty[i] = SCALE(yplane[i]);
+	}
+
+	// copy plane 1 and 2 alternatingly from source
+	height = buffer->height / 2;
+	uplane = (uint16_t *) frame->data[1];
+	vplane = (uint16_t *) frame->data[2];
+	dstuv = (uint16_t *) (buffer->mmap + buffer->stride * buffer->height);
+
+	// both uplane and vplane would have same linesize
+	linesize = frame->linesize[1];
+
+	size = (linesize * height) / 2;
+
+	// copy u, v alternatingly
+	for (int i = 0; i < size; i++) {
+		dstuv[2 * i] = SCALE(uplane[i]);
+		dstuv[(2 * i) + 1] = SCALE(vplane[i]);
+	}
+}
+
+static void
 fill_buffer(struct buffer *buffer, AVFrame *frame) {
-	int i;
 	int linesize;
-	uint8_t *src, *dst;
 	int height;
 	int plane_heights[4] = {0};
 	int offsets[4] = {0};
 	int n_planes = 0;
+	uint8_t *src, *dst;
+	int i;
 	assert(buffer->mmap);
 
 	switch (buffer->format) {
@@ -510,16 +549,14 @@ fill_buffer(struct buffer *buffer, AVFrame *frame) {
 		n_planes = 3;
 		break;
 	case DRM_FORMAT_P010:
-		plane_heights[0] = buffer->height;
-		plane_heights[1] = buffer->height / 2;
-		offsets[0] = 0;
-		offsets[1] = buffer->height;
-		n_planes = 2;
+		copy_420p10_to_p010(buffer, frame);
+		return;
 	}
 
 	for (i = 0; i < n_planes; i++) {
 		height = plane_heights[i];
 		linesize = frame->linesize[i];
+
 		src = frame->data[i];
 		dst = buffer->mmap + frame->linesize[0] * offsets[i];
 
@@ -529,6 +566,7 @@ fill_buffer(struct buffer *buffer, AVFrame *frame) {
 			src += linesize;
 		}
 	}
+
 }
 
 static void
