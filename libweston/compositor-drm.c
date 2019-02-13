@@ -66,6 +66,7 @@
 #include "presentation-time-server-protocol.h"
 #include "linux-dmabuf.h"
 #include "linux-dmabuf-unstable-v1-server-protocol.h"
+#include "drm-color-transformation.h"
 #include "hdr-edids.h"
 
 #ifndef DRM_CLIENT_CAP_ASPECT_RATIO
@@ -477,6 +478,7 @@ struct drm_head {
 	uint32_t connector_id;
 	struct drm_edid edid;
 	struct drm_edid_hdr_metadata_static *hdr_md;
+	uint32_t clrspaces;
 	uint32_t hdr_md_blob_id;
 
 	/* Holds the properties for the connector */
@@ -1269,6 +1271,12 @@ void drm_print_va_desc(VADRMPRIMESurfaceDescriptor *vad)
 	weston_log_continue("**************************************************\n"); 
 }
 
+const struct pixel_format_info XBGR10 = {
+	.format = DRM_FORMAT_XBGR2101010,
+	.depth = 30,
+	.bpp = 32,
+};
+
 const struct pixel_format_info XRGB10 = {
 	.format = DRM_FORMAT_XRGB2101010,
 	.depth = 30,
@@ -1278,6 +1286,26 @@ const struct pixel_format_info XRGB10 = {
 const struct pixel_format_info XRGB8 = {
 	.format = DRM_FORMAT_XRGB8888,
 	.depth = 24,
+	.bpp = 32,
+};
+
+const struct pixel_format_info ARGB8 = {
+	.format = DRM_FORMAT_ARGB8888,
+	.opaque_substitute = DRM_FORMAT_XRGB8888,
+	.depth = 32,
+	.bpp = 32,
+};
+
+const struct pixel_format_info RGBA8 = {
+	.format = DRM_FORMAT_RGBA8888,
+	.opaque_substitute = DRM_FORMAT_RGBX8888,
+	.depth = 32,
+	.bpp = 32,
+};
+
+const struct pixel_format_info RGBX8 = {
+	.format = DRM_FORMAT_RGBX8888,
+	.depth = 32,
 	.bpp = 32,
 };
 
@@ -1323,27 +1351,24 @@ drm_fb_get_from_vasurf(struct drm_va_display *d,
 	fb->modifier = va_desc->objects[0].drm_format_modifier;
 	fb->size = va_desc->objects[0].size;
 	fb->format = pixel_format_get_info(va_desc->layers[0].drm_format);
-#if 1
-	fb->format = &XRGB8;
-#endif
 	if (!fb->format) {
 		weston_log("VA: couldn't look up format info for 0x%lx\n",
 			   (unsigned long) va_desc->fourcc);
 		goto err_free;
 	}
 
-#if 0
 	fb->format = pixel_format_get_opaque_substitute(fb->format);
 	weston_log_continue("VA: Fb opaque subs format=0x%x %s\n",
 		fb->format->format, drm_print_format_name(fb->format->format));
+#if 1
 	/* Hack */
-	fb->format = &XRGB10;
-	/* Hack */
-	fb->format = &P010;
-#endif
-
-	weston_log_continue("VA: post hack format=0x%x %s\n",
+	if (fb->format->format != DRM_FORMAT_ARGB2101010) {
+		//fb->format = &XRGB8;
+		fb->format = &XBGR10;
+		weston_log_continue("VA: post hack format=0x%x %s\n",
 		fb->format->format, drm_print_format_name(fb->format->format));
+	}
+#endif
 
 	prime_fd = va_desc->objects[0].fd;
 	fb->num_planes = (int)va_desc->layers[0].num_planes;
@@ -4051,10 +4076,13 @@ drm_output_propose_hdr_state(struct weston_output *output_base,
 			weston_log_continue("Shashank: Overlay view failed for DMA surface\n");
 			goto err;
 		}
+#if 0
+		drm_prepare_plane_for_blending(output, ev, tm_target);
+#endif
 	}
 
 	ret = drm_mode_create_property_blob(b, (void *)&tm_target->target_md,
-					sizeof(tm_target->target_md), 
+					sizeof(tm_target->target_md),
 					&head->hdr_md_blob_id);
 	if (ret) {
 		drm_debug(b, "\t\t\t\t[view] Set HDR blob failed\n");
@@ -4071,7 +4099,8 @@ drm_output_propose_hdr_state(struct weston_output *output_base,
 		goto err;
 	}
 
-	weston_log_continue("Shashank: Success: propose HDR state, view=%d\n", view_count);
+	weston_log_continue("Shashank: Success: propose HDR state, num view=%d\n",
+		view_count);
 	return state;
 
 err:
@@ -4096,6 +4125,10 @@ drm_prepare_hdr_target(struct drm_backend *b,
 {
 	int ret;
 	struct drm_tone_map *target;
+	struct drm_edid_hdr_metadata_static *display_md = drm_head->hdr_md;
+	enum drm_colorspace target_cs = DRM_COLORSPACE_REC709;
+	uint8_t target_eotf = DRM_EOTF_SDR_TRADITIONAL;
+	uint16_t display_cs = drm_head->clrspaces & EDID_CS_HDR_CS_BASIC;
 
 	target = zalloc(sizeof(*target));
 	if (!target) {
@@ -4111,9 +4144,26 @@ drm_prepare_hdr_target(struct drm_backend *b,
 		return NULL;
 	}
 
-	/* Get tone mapping mode */
+	if (display_md && display_cs) {
+
+		/* Display is HDR and supports bsdic HDR wide gamuts */
+		target_eotf = DRM_EOTF_HDR_ST2084;
+		if (display_cs & EDID_CS_BT2020RGB)
+			target_cs = DRM_COLORSPACE_REC2020;
+		else
+			target_cs = DRM_COLORSPACE_DCIP3;
+	} else {
+
+		/* Display is SDR */
+		target_eotf = DRM_EOTF_SDR_TRADITIONAL;
+		target_cs = DRM_COLORSPACE_REC709;
+	}
+
+	target->target_eotf = target_eotf;
+	target->target_cs = target_cs;
 	target->tone_map_mode = drm_tone_mapping_mode(hdr_surf->hdr_metadata,
 				drm_head->hdr_md);
+	weston_log("Shashank: tone mapping mode %d\n", target->tone_map_mode);
 	return target;
 }
 
@@ -4209,7 +4259,6 @@ drm_assign_planes(struct weston_output *output_base, void *repaint_data)
 		if (ret) {
 			weston_log("Handling HDR view failed\n");
 		}
-
 		return;
 	}
 
@@ -5836,17 +5885,14 @@ find_and_parse_output_edid(struct drm_head *head,
 	}
 
 #if 1
-	head->hdr_md = drm_get_hdr_metadata(edid_blob->data, edid_blob->length);
+	head->hdr_md =
+		drm_get_hdr_metadata(edid_blob->data, edid_blob->length);
 #else
 	head->hdr_md = drm_get_hdr_metadata(samsung_hdr_edid, 256);
 #endif
-#if 1
-	if (head->hdr_md) {
-		weston_log_continue("Shashank: in %s printing hdr_md\n", __func__);
-		drm_print_hdr_metadata(head->hdr_md);
-	}
-#endif
-	
+	head->clrspaces =
+		drm_get_display_clrspace(edid_blob->data, edid_blob->length);
+
 	drmModeFreePropertyBlob(edid_blob);
 }
 

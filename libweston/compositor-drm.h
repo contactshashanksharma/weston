@@ -325,6 +325,8 @@ struct drm_edid_hdr_metadata_static {
 
 struct drm_tone_map {
 	uint8_t tone_map_mode;
+	uint8_t target_eotf;
+	uint8_t target_cs;
 	struct drm_hdr_metadata_static target_md;
 };
 
@@ -433,6 +435,14 @@ static const char *drm_print_format_name(uint32_t format)
 	return NULL;
 }
 
+enum drm_colorspace {
+	DRM_COLORSPACE_INVALID,
+	DRM_COLORSPACE_REC709,
+	DRM_COLORSPACE_DCIP3,
+	DRM_COLORSPACE_REC2020,
+	DRM_COLORSPACE_MAX,
+};
+
 /* drm-compositor.c */
 const uint8_t *
 edid_find_extended_data_block(const uint8_t *edid,
@@ -455,6 +465,8 @@ drm_prepare_output_hdr_metadata(struct drm_backend *b,
 
 struct drm_edid_hdr_metadata_static *
 drm_get_hdr_metadata(const uint8_t *edid, uint32_t edid_len);
+uint16_t
+drm_get_display_clrspace(const uint8_t *edid, uint32_t edid_len);
 
 void
 drm_release_hdr_metadata(struct drm_edid_hdr_metadata_static *md);

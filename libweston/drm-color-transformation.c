@@ -117,7 +117,7 @@ matrix_inverse_3x3(double matrix[3][3], double result[3][3])
         tmp[2][2] = (matrix[0][0] * matrix[1][1] -
 			matrix[0][1] * matrix[1][0]) / determinant;
 
-	memcpy(result, tmp, 9 * sizeof(double));
+		memcpy(result, tmp, 9 * sizeof(double));
         ret_val = 0;
     }
 
@@ -375,61 +375,52 @@ noop_invalid_matrix(double result[3][3])
 	return;
 }
 
+/* This function is just for the sake of completion of array */
+static void
+noop_unity_matrix(double result[3][3])
+{
+	return;
+}
+
 /* Array of function ptrs which generate CSC matrix */
 void (*generate_csc_fptrs[][DRM_COLORSPACE_MAX])(double[3][3]) = {
-	[DRM_COLORSPACE_REC_709][DRM_COLORSPACE_REC_709] =
-		create_unity_matrix,
-	[DRM_COLORSPACE_REC_709][DRM_COLORSPACE_DCI_P3] =
+	[DRM_COLORSPACE_REC709][DRM_COLORSPACE_REC709] =
+		noop_unity_matrix,
+	[DRM_COLORSPACE_REC709][DRM_COLORSPACE_DCIP3] =
 		create_709_to_DCIP3_matrix,
-	[DRM_COLORSPACE_REC_709][DRM_COLORSPACE_REC_2020] =
+	[DRM_COLORSPACE_REC709][DRM_COLORSPACE_REC2020] =
 		create_709_to_2020_matrix,
-	[DRM_COLORSPACE_DCI_P3][DRM_COLORSPACE_REC_709] =
+	[DRM_COLORSPACE_DCIP3][DRM_COLORSPACE_REC709] =
 		noop_invalid_matrix,
-	[DRM_COLORSPACE_DCI_P3][DRM_COLORSPACE_DCI_P3] =
+	[DRM_COLORSPACE_DCIP3][DRM_COLORSPACE_DCIP3] =
 		noop_invalid_matrix,
-	[DRM_COLORSPACE_DCI_P3][DRM_COLORSPACE_REC_2020] =
+	[DRM_COLORSPACE_DCIP3][DRM_COLORSPACE_REC2020] =
 		noop_invalid_matrix,
-	[DRM_COLORSPACE_REC_2020][DRM_COLORSPACE_REC_709] =
+	[DRM_COLORSPACE_REC2020][DRM_COLORSPACE_REC709] =
 		create_2020_to_709_matrix,
-	[DRM_COLORSPACE_REC_2020][DRM_COLORSPACE_DCI_P3] =
+	[DRM_COLORSPACE_REC2020][DRM_COLORSPACE_DCIP3] =
 		create_2020_to_DCIP3_matrix,
-	[DRM_COLORSPACE_REC_2020][DRM_COLORSPACE_REC_2020] =
-		create_unity_matrix,
+	[DRM_COLORSPACE_REC2020][DRM_COLORSPACE_REC2020] =
+		noop_unity_matrix,
 };
 
 /* Generate LUT for gamut mapping */
-static double *
+static void
 drm_generate_csc_lut(struct drm_backend *b,
-		     enum drm_colorspace current,
-		     enum drm_colorspace target)
+			double csc_matrix[3][3],
+		    enum drm_colorspace current,
+		    enum drm_colorspace target)
 {
-	void (*generate_csc_matrix)(double[3][3]);
+	void (*generate_csc_matrix_fn)(double[3][3]);
 	double *csc_matrix;
 
-	if (current < DRM_COLORSPACE_REC_709 ||
-		current > DRM_COLORSPACE_REC_2020 ||
-		target < DRM_COLORSPACE_REC_709 ||
-		target > DRM_COLORSPACE_REC_2020) {
-			drm_debug(b, "\t\t[state] invalid input/output colorspace\n");
-			return NULL;
-	}
-
-	csc_matrix = malloc(9 * sizeof(double));
-	if (!csc_matrix) {
-		drm_debug(b, "\t\t[state] OOM while applying CSC\n");
-		return NULL;
-	}
-
-	generate_csc_matrix = generate_csc_fptrs[current][target];
-
-	/* DCI-P3 is not practically an input colorspace, its just an output colorspace */
-	if (generate_csc_matrix == noop_invalid_matrix) {
+	generate_csc_matrix_fn = generate_csc_fptrs[current][target];
+	if (generate_csc_matrix_fn == noop_invalid_matrix) {
 		drm_debug(b, "\t\t[state] invalid input colorspace DCI-P3\n");
-		return NULL;
+		return -1;
 	}
 
-	generate_csc_matrix(csc_matrix);
-	return csc_matrix;
+	generate_csc_matrix_fn(csc_matrix);
 }
 
 static int
@@ -437,19 +428,15 @@ drm_setup_plane_csc(struct drm_backend *b,
 		    struct drm_plane_state *ps,
 		    enum drm_colorspace target_cs)
 {
-	double *csc_lut;
+	double csc_lut[3][3];
 	enum drm_colorspace content_cs = ps->ev->surface->colorspace;
 
-	csc_lut = drm_generate_csc_lut(b, content_cs, target_cs);
-	if (!csc_lut) {
-		drm_debug(b, "\t\t[state] Failed to get CSC lut for plane\n");
-		return -1;
-	}
-
-	return drm_setup_property_blob(b, &ps->csc_blob_id,
-				9 * sizeof(double), (uint8_t *)csc_lut);
+	drm_generate_csc_lut(b, csc_lut, content_cs, target_cs);
+	return drm_mode_create_property_blob(b, &ps->csc_blob_id,
+			sizeof(csc_lut), (uint8_t *)csc_lut);
 }
 
+#if 0
 static double 
 OETF_2084(double input, double src_max_luminance)
 {
@@ -630,7 +617,7 @@ drm_setup_plane_degamma(struct drm_backend *b,
 	else
 		deg_lut = generate_degamma_lut(b, deg_lut_size, 0xffff);
 
-	return drm_setup_property_blob(b, &ps->degamma_blob_id,
+	return drm_mode_create_property_blob(b, &ps->degamma_blob_id,
 						deg_lut_size * sizeof(struct drm_color_lut),
 						(const uint8_t *)deg_lut);
 }
@@ -640,7 +627,7 @@ drm_output_setup_hdr_metadata(struct drm_backend *b,
 			struct drm_output_state *state,
 			struct drm_edid_hdr_metadata_static *display_md)
 {
-	return drm_setup_property_blob(b, &state->hdr_metadata_blob_id,
+	return drm_mode_create_property_blob(b, &state->hdr_metadata_blob_id,
 				sizeof(*display_md), (const uint8_t *)display_md);
 }
 
@@ -662,7 +649,7 @@ drm_output_setup_gamma(struct drm_backend *b,
 		return -1;
 	}
 
-	return drm_setup_property_blob(b, &state->gamma_blob_id,
+	return drm_mode_create_property_blob(b, &state->gamma_blob_id,
 				state->gamma_size * sizeof(*gamma_lut),
 				(const uint8_t *)gamma_lut);
 }
@@ -701,7 +688,7 @@ drm_prepare_plane_for_blending(struct drm_backend *b,
 
 	return 0;
 }
-
+#else
 int
 drm_output_prepare_colorspace(struct drm_output_state *state)
 {
@@ -718,7 +705,7 @@ drm_output_prepare_colorspace(struct drm_output_state *state)
 	/* Its safe to assume REC_709 colorspace as default */
 	if (display_gamut <= DRM_COLORSPACE_UNKNOWN ||
 		display_gamut >= DRM_COLORSPACE_MAX)
-		display_gamut = DRM_COLORSPACE_REC_709;
+		display_gamut = DRM_COLORSPACE_REC709;
 
 	weston_log("Shashank: Searching planes to blend, target csp=%s, tone=%s\n",
 				colorspace_names[display_gamut],
@@ -751,7 +738,7 @@ drm_output_prepare_colorspace(struct drm_output_state *state)
 		* cases where there might be one HDR buffer (REC2020 space) and other
 		* SDR buffers created in REC709 colorspace */
 		if (psurf->colorspace == DRM_COLORSPACE_UNKNOWN)
-			psurf->colorspace = DRM_COLORSPACE_REC_709;
+			psurf->colorspace = DRM_COLORSPACE_REC709;
 
 		if (psurf->colorspace != display_gamut) {
 			ret = drm_prepare_plane_for_blending(b, ps, display_gamut);
@@ -804,4 +791,57 @@ drm_output_prepare_colorspace(struct drm_output_state *state)
 	drm_debug(b, "\t\t[state] Plane colorspace prepared\n");
 	return 0;
 }
+#endif
 
+static inline void
+convert_to_weston_md(struct weston_hdr_metadata_static *wmd,
+		struct drm_hdr_metadata_static *dmd)
+{
+	wmd->eotf = dmd->eotf;
+	wmd->max_cll = dmd->max_cll;
+	wmd->max_fall = dmd->max_fall;
+	wmd->white_point_x = dmd->white_point_x;
+	wmd->white_point_y = dmd->white_point_y;
+	wmd->display_primary_b_x = dmd->primary_b_x;
+	wmd->display_primary_b_y = dmd->primary_b_y;
+	wmd->display_primary_g_x = dmd->primary_g_x;
+	wmd->display_primary_g_y = dmd->primary_g_y;
+	wmd->display_primary_r_x = dmd->primary_r_x;
+	wmd->display_primary_r_y = dmd->primary_r_y;
+	wmd->max_luminance = dmd->max_mastering_luminance;
+	wmd->min_luminance = dmd->min_mastering_luminance;
+}
+
+static void
+drm_prepare_plane_for_blending(struct weston_output *output_base,
+				struct drm_plane_state *ps,
+				struct drm_tone_map *tm)
+{
+	struct drm_output *output = to_drm_output(output_base);
+	struct weston_head *weston_head = weston_output_get_first_head(output_base);
+	struct drm_head *drm_head = to_drm_head(weston_head);
+	struct weston_view *ev = ps->ev;
+	struct weston_surface *surface;
+	struct weston_hdr_transformation *t;
+	bool display_is_hdr = !!drm_head->hdr_md;
+	int ret;
+
+	t = &surface->transformations;
+	t->target_cs = tm->target_cs;
+	t->target_eotf = tm->target_eotf;
+	t->target_md = convert_to_weston_md(tm->target_md);
+	if (surface->hdr_metadata)
+		t->tm_mode = (display_is_hdr ? DRM_TONE_MAP_H2H : DRM_TONE_MAP_H2S);
+	else
+		t->tm_mode = (display_is_hdr ? DRM_TONE_MAP_S2H : DRM_TONE_MAP_NONE);
+
+	// DO CSC
+	ret = drm_generate_csc_lut(t->csc_matrix, surface->colorspace, tm->target_cs);
+	if (ret) {
+		weston_log("Failed to generate CSC lut for surf %p\n", surface);
+	}
+
+	// DO DeGamma
+
+	// DO tone map
+}

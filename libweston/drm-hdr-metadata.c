@@ -22,41 +22,14 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-#include <va/va.h>
-#include <string.h>
 #include "compositor-drm.h"
 #include "shared/helpers.h"
+#include "drm-color-transformation.h"
 
-/* CEA-861-G new EDID blocks for HDR */
-#define EDID_CEA_TAG_COLORIMETRY			0x5
-#define EDID_CEA_EXT_TAG_STATIC_METADATA 		0x6
-#define EDID_CEA_EXT_TAG_DYNAMIC_METADATA 		0x7
-
-/* CTA-861-G: Electro optical transfer function (EOTF) bitmap */
-#define EOTF_ET0_GAMMA_SDR_LUM		(1 << 0)
-#define EOTF_ET1_GAMMA_HDR_LUM		(1 << 1)
-#define EOTF_ET2_SMPTE_2084_LUM		(1 << 2)
-#define EOTF_ET3_HLG_BT_2100_LUM	(1 << 3)
-
-/* CTA-861-G: Static metadata descriptor support bitmap */
-#define STATIC_METADATA_TYPE1 (1 << 0)
-
-/* CTA-861-G: HDR Metadata names and types */
-enum drm_hdr_eotf_type {
-	DRM_EOTF_SDR_TRADITIONAL,
-	DRM_EOTF_HDR_TRADITIONAL,
-	DRM_EOTF_HDR_ST2084,
-	DRM_EOTF_HLG_BT2100,
-	DRM_EOTF_MAX
-};
-
-enum drm_hdr_oetf_type {
-	DRM_OETF_SDR_TRADITIONAL,
-	DRM_OETF_HDR_TRADITIONAL,
-	DRM_OETF_HDR_ST2084,
-	DRM_OETF_HLG_BT2100,
-	DRM_OETF_MAX
-};
+#define HIGH_X(val) (val >> 6)
+#define HIGH_Y(val) ((val >> 4) & 0x3)
+#define LOW_X(val)  ((val >> 2) & 0x3)
+#define LOW_Y(val)  ((val >> 4) & 0x3)
 
 const char *eotf_names[] = {
 	[EOTF_ET0_GAMMA_SDR_LUM] = "ET0 SDR GAMMA Range",
@@ -71,11 +44,42 @@ const char *md_type[] = {
 	[1] = "Type 1",
 };
 
-#define HIGH_X(val) (val >> 6)
-#define HIGH_Y(val) ((val >> 4) & 0x3)
-#define LOW_X(val)  ((val >> 2) & 0x3)
-#define LOW_Y(val)  ((val >> 4) & 0x3)
+static void drm_print_metadata(struct weston_hdr_metadata_static *s,
+		struct drm_edid_hdr_metadata_static *d,
+		struct drm_hdr_metadata_static *o)
+{
+	weston_log("========= All metadata ===========\n");
+	weston_log("Property Surface Display Output \n");
+	weston_log("Max Lum \t %d \t %d \t %d\n", s->max_luminance, 
+		d->desired_max_ll, o->max_mastering_luminance);
+	weston_log("Min Lum \t %d \t %d \t %d\n", s->min_luminance, 
+		d->desired_min_ll, o->min_mastering_luminance);
+	weston_log("Max CLL \t %d \t %d \t %d\n", s->max_cll, 
+		d->desired_max_ll, o->max_cll);
+	weston_log("Max FALL %d \t %d \t %d\n", s->max_fall, 
+		d->desired_max_fall, o->max_fall);
+	weston_log("EOTF \t %d \t %d \t %d\n", s->eotf, 
+		d->eotf, o->eotf);
+	weston_log("R x,y \t %d,%d \t %d,%d \t %d,%d\n", 
+		s->display_primary_r_x,s->display_primary_r_y, 
+		d->display_primary_r_x, d->display_primary_r_y,
+		o->primary_r_x, o->primary_r_y);
+	weston_log("G x,y \t %d,%d \t %d,%d \t %d,%d\n", 
+		s->display_primary_g_x,s->display_primary_g_y, 
+		d->display_primary_g_x, d->display_primary_g_y,
+		o->primary_g_x, o->primary_g_y);
+	weston_log("B x,y \t %d,%d \t %d,%d \t %d,%d\n", 
+		s->display_primary_b_x,s->display_primary_b_y, 
+		d->display_primary_b_x, d->display_primary_b_y,
+		o->primary_b_x, o->primary_b_y);
+	weston_log("WP x,y \t %d,%d \t %d,%d \t %d,%d\n", 
+		s->white_point_x,s->white_point_y, 
+		d->white_point_x, d->white_point_y,
+		o->white_point_x, o->white_point_y);
+	weston_log("========= END ===========\n");
+}
 
+#define MIN_IF_NT_ZERO(c, d) (c ? MIN(c, d) : d)
 
 int
 drm_prepare_output_hdr_metadata(struct drm_backend *b,
@@ -95,13 +99,21 @@ drm_prepare_output_hdr_metadata(struct drm_backend *b,
 		return -1;
 	}
 #endif
-
+#if 1
 	/* Plan is to allow the content's values as long as monitor can support  */
-	out_md->max_cll = MIN(content_md->max_cll, display_md->desired_max_ll);
-	out_md->max_fall = MIN(content_md->max_fall, display_md->desired_max_ll);
+	if (display_md->desired_max_ll)
+		out_md->max_cll = MIN(content_md->max_cll, display_md->desired_max_ll);
+	else
+		out_md->max_cll = content_md->max_cll;
+
+	if (display_md->desired_max_fall)
+		out_md->max_fall = MIN(content_md->max_fall, display_md->desired_max_ll);
+	else
+		out_md->max_fall = content_md->max_fall;
+
 	out_md->max_mastering_luminance = content_md->max_luminance;
 	out_md->min_mastering_luminance = content_md->min_luminance;
-	out_md->eotf = EOTF_ET2_SMPTE_2084_LUM;
+	out_md->eotf = EOTF_ET1_GAMMA_HDR_LUM;//EOTF_ET2_SMPTE_2084_LUM;
 	out_md->white_point_x = content_md->white_point_x;
 	out_md->white_point_y = content_md->white_point_y;
 	out_md->primary_r_x = content_md->display_primary_r_x;
@@ -110,7 +122,34 @@ drm_prepare_output_hdr_metadata(struct drm_backend *b,
 	out_md->primary_g_y = content_md->display_primary_g_y;
 	out_md->primary_b_x = content_md->display_primary_b_x;
 	out_md->primary_b_y = content_md->display_primary_b_y;
+#else
+	out_md->max_cll = MIN_IF_NT_ZERO(content_md->max_cll, 
+		display_md->desired_max_ll);
+	out_md->max_fall = MIN_IF_NT_ZERO(content_md->max_fall, 
+		display_md->desired_max_fall);
+	out_md->max_mastering_luminance = content_md->max_luminance;
+	out_md->min_mastering_luminance = content_md->min_luminance;
+	out_md->white_point_x = MIN_IF_NT_ZERO(content_md->white_point_x, 
+		display_md->white_point_x);
+	out_md->white_point_x = MIN_IF_NT_ZERO(content_md->white_point_y,
+		display_md->white_point_y);
+	out_md->primary_r_x = MIN_IF_NT_ZERO(content_md->display_primary_r_x,
+		display_md->display_primary_r_x);
+	out_md->primary_r_y = MIN_IF_NT_ZERO(content_md->display_primary_r_y,
+		display_md->display_primary_r_y);
+	out_md->primary_g_x = MIN_IF_NT_ZERO(content_md->display_primary_g_x,
+		display_md->display_primary_g_x);
+	out_md->primary_g_y = MIN_IF_NT_ZERO(content_md->display_primary_g_y,
+		display_md->display_primary_g_y);
+	out_md->primary_b_x = MIN_IF_NT_ZERO(content_md->display_primary_b_x,
+		display_md->display_primary_b_x);
+	out_md->primary_b_y = MIN_IF_NT_ZERO(content_md->display_primary_b_y,
+		display_md->display_primary_b_y);
+	out_md->eotf = 2;//EOTF_ET2_SMPTE_2084_LUM;
+#endif
 
+	out_md->metadata_type = 1;
+	drm_print_metadata(content_md, display_md, out_md);
 	return 0;
 }
 
@@ -167,8 +206,27 @@ drm_get_hdr_static_metadata(const uint8_t *hdr_db, uint32_t data_len)
 		s->desired_max_ll = hdr_db[2];
 		s->desired_max_fall = hdr_db[3];
 		s->desired_min_ll = hdr_db[4];
+
+		if (!s->desired_max_ll)
+			s->desired_max_ll = 0xFF;
 	}
 	return s;
+}
+
+uint16_t
+drm_get_display_clrspace(const uint8_t *edid, uint32_t edid_len)
+{
+	uint8_t data_len = 0;
+	const uint8_t *clr_db;
+	uint16_t clrspaces = 0;
+
+	clr_db = edid_find_extended_data_block(edid, &data_len,
+			EDID_CEA_TAG_COLORIMETRY);
+	if (clr_db && data_len != 0)
+		/* db[4] bit 7 is DCI-P3 support information (added in CTA-861-G) */
+		clrspaces = ((clr_db[4] & 0x80) << 8) | (clr_db[3]);
+
+	return clrspaces;
 }
 
 struct drm_edid_hdr_metadata_static *
@@ -193,6 +251,7 @@ drm_get_hdr_metadata(const uint8_t *edid, uint32_t edid_len)
 		}
 
 		drm_set_color_primaries(edid, md);
+		drm_print_hdr_metadata(&md);
 		weston_log("Found static HDR metadata in EDID\n");
 	}
 

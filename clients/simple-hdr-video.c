@@ -494,6 +494,7 @@ static void
 copy_420p10_to_p010(struct buffer *buffer, AVFrame *frame)
 {
 #define SCALE(x) 65535.0f * x / 1023.0f
+//#define SCALE(x) x
 	int height, linesize;
 	uint16_t *yplane, *dsty, *uplane, *vplane, *dstuv;
 

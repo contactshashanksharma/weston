@@ -186,6 +186,7 @@ drm_va_create_surface_from_fb(struct drm_va_display *d,
 		return VA_INVALID_SURFACE;
 	}
 
+	close(prime_fd);
 	weston_log("VA: Created input surface 0x%x, drm format 0x%x fourcc %s\n",
 		surface, VA_FOURCC_P010, drm_print_format_name(surf_fourcc));
 	return surface;
@@ -261,15 +262,14 @@ drm_va_setup_surfaces(VARectangle *surface_region,
 
 static int
 drm_va_set_output_tm_metadata(struct weston_hdr_metadata *content_md, 
-				const struct drm_hdr_metadata_static *target_md,
+				struct drm_tone_map *tm,
 				VAHdrMetaDataHDR10 *o_hdr10_md,
 				VAHdrMetaData *out_metadata)
 {
-	const struct drm_hdr_metadata_static *t_smd;
-	/* TODO: Add support for dynamic metadat too */
+	const struct drm_hdr_metadata_static *t_smd = &tm->target_md;
 
 	/* SDR target display */
-	if (!target_md) {
+	if (tm->tone_map_mode == VA_TONE_MAPPING_HDR_TO_SDR) {
 
 		/* Hard coding values to standard SDR libva values */
 		o_hdr10_md->display_primaries_x[0] = 15000;
@@ -287,7 +287,6 @@ drm_va_set_output_tm_metadata(struct weston_hdr_metadata *content_md,
 		return 0;
 	}
 
-	t_smd = target_md;
 	o_hdr10_md->max_display_mastering_luminance = t_smd->max_mastering_luminance;
 	o_hdr10_md->min_display_mastering_luminance = t_smd->min_mastering_luminance;
 	o_hdr10_md->max_pic_average_light_level = t_smd->max_fall;
@@ -582,7 +581,7 @@ drm_va_tone_map(struct drm_va_display *d,
 	}
 
 	/* Setup output tonemapping properties */
-	ret = drm_va_set_output_tm_metadata(content_md, &tm->target_md, &d->out_md_params,
+	ret = drm_va_set_output_tm_metadata(content_md, tm, &d->out_md_params,
 				&d->output_metadata);
 	if (ret) {
 		weston_log("VA: Can't setup HDR metadata\n");
