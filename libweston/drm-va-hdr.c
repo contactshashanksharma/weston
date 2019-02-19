@@ -557,12 +557,7 @@ drm_va_tone_map(struct drm_va_display *d,
 	struct drm_fb *out_fb = NULL;
 
 	if (!d || !fb || !tm) {
-		weston_log_continue("VA: NULL input, VA not initialized ?\n");
-		return NULL;
-	}
-
-	if (fb->format->format != DRM_FORMAT_P010) {
-		weston_log("VA: Current implementation supports P010 format only\n");
+		weston_log_continue("VA: NULL input, d=%p fb=%p tm=%p VA not initialized ?\n", d, fb, tm);
 		return NULL;
 	}
 

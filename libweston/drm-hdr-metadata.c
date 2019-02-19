@@ -44,40 +44,65 @@ const char *md_type[] = {
 	[1] = "Type 1",
 };
 
+#define NON_NULL(a, b) (a ? a->b : -1)
+
 static void drm_print_metadata(struct weston_hdr_metadata_static *s,
 		struct drm_edid_hdr_metadata_static *d,
 		struct drm_hdr_metadata_static *o)
 {
 	weston_log("========= All metadata ===========\n");
 	weston_log("Property Surface Display Output \n");
-	weston_log("Max Lum \t %d \t %d \t %d\n", s->max_luminance, 
-		d->desired_max_ll, o->max_mastering_luminance);
-	weston_log("Min Lum \t %d \t %d \t %d\n", s->min_luminance, 
-		d->desired_min_ll, o->min_mastering_luminance);
-	weston_log("Max CLL \t %d \t %d \t %d\n", s->max_cll, 
-		d->desired_max_ll, o->max_cll);
-	weston_log("Max FALL %d \t %d \t %d\n", s->max_fall, 
-		d->desired_max_fall, o->max_fall);
-	weston_log("EOTF \t %d \t %d \t %d\n", s->eotf, 
-		d->eotf, o->eotf);
+	weston_log("Max Lum \t %d \t %d \t %d\n",
+		NON_NULL(s,max_luminance),
+		NON_NULL(d,desired_max_ll),
+		NON_NULL(o,max_mastering_luminance));
+	weston_log("Min Lum \t %d \t %d \t %d\n",
+		NON_NULL(s,min_luminance),
+		NON_NULL(d,desired_min_ll),
+		NON_NULL(o,min_mastering_luminance));
+	weston_log("Max CLL \t %d \t %d \t %d\n",
+		NON_NULL(s,max_cll),
+		NON_NULL(d,desired_max_ll),
+		NON_NULL(o,max_cll));
+	weston_log("Max FALL %d \t %d \t %d\n",
+		NON_NULL(s,max_fall),
+		NON_NULL(d,desired_max_fall),
+		NON_NULL(o,max_fall));
+	weston_log("EOTF \t %d \t %d \t %d\n",
+		NON_NULL(s,eotf),
+		NON_NULL(d,eotf),
+		NON_NULL(o,eotf));
 	weston_log("R x,y \t %d,%d \t %d,%d \t %d,%d\n", 
-		s->display_primary_r_x,s->display_primary_r_y, 
-		d->display_primary_r_x, d->display_primary_r_y,
-		o->primary_r_x, o->primary_r_y);
+		NON_NULL(s,display_primary_r_x),
+		NON_NULL(s,display_primary_r_y),
+		NON_NULL(d,display_primary_r_x),
+		NON_NULL(d,display_primary_r_y),
+		NON_NULL(o,primary_r_x),
+		NON_NULL(o,primary_r_y));
 	weston_log("G x,y \t %d,%d \t %d,%d \t %d,%d\n", 
-		s->display_primary_g_x,s->display_primary_g_y, 
-		d->display_primary_g_x, d->display_primary_g_y,
-		o->primary_g_x, o->primary_g_y);
+		NON_NULL(s,display_primary_g_x),
+		NON_NULL(s,display_primary_g_y),
+		NON_NULL(d,display_primary_g_x),
+		NON_NULL(d,display_primary_g_y),
+		NON_NULL(o,primary_g_x),
+		NON_NULL(o,primary_g_y));
 	weston_log("B x,y \t %d,%d \t %d,%d \t %d,%d\n", 
-		s->display_primary_b_x,s->display_primary_b_y, 
-		d->display_primary_b_x, d->display_primary_b_y,
-		o->primary_b_x, o->primary_b_y);
+		NON_NULL(s,display_primary_b_x),
+		NON_NULL(s,display_primary_b_y),
+		NON_NULL(d,display_primary_b_x),
+		NON_NULL(d,display_primary_b_y),
+		NON_NULL(o,primary_b_x),
+		NON_NULL(o,primary_b_y));
 	weston_log("WP x,y \t %d,%d \t %d,%d \t %d,%d\n", 
-		s->white_point_x,s->white_point_y, 
-		d->white_point_x, d->white_point_y,
-		o->white_point_x, o->white_point_y);
+		NON_NULL(s,white_point_x),
+		NON_NULL(s,white_point_y),
+		NON_NULL(d,white_point_x),
+		NON_NULL(d,white_point_y),
+		NON_NULL(o,white_point_x),
+		NON_NULL(o,white_point_y));
 	weston_log("========= END ===========\n");
 }
+
 
 #define MIN_IF_NT_ZERO(c, d) (c ? MIN(c, d) : d)
 
@@ -87,72 +112,89 @@ drm_prepare_output_hdr_metadata(struct drm_backend *b,
 		struct drm_edid_hdr_metadata_static *display_md,
 		struct drm_hdr_metadata_static *out_md)
 {
-	struct weston_hdr_metadata_static *content_md;
+	struct weston_hdr_metadata_static *content_md = NULL;
 
-	content_md = &surface_md->metadata.static_metadata;
+	if (surface_md) {
+
+		content_md = &surface_md->metadata.static_metadata;
 #if 0
-	/* TODO: We are supporting only SMPTE-2084 EOTF for now */
-	if (!(content_md->eotf & EOTF_ET2_SMPTE_2084_LUM) ||
-		!(display_md->eotf & EOTF_ET2_SMPTE_2084_LUM)) {
-		weston_log("content(0x%x)/display(0x%x) can't support SMPTE2084 eotf\n",
-			content_md->eotf, display_md->eotf);
-		return -1;
-	}
+		/* TODO: We are supporting only SMPTE-2084 EOTF for now */
+		if (!(content_md->eotf & EOTF_ET2_SMPTE_2084_LUM) ||
+			!(display_md->eotf & EOTF_ET2_SMPTE_2084_LUM)) {
+			weston_log("content(0x%x)/display(0x%x) can't support SMPTE2084 eotf\n",
+				content_md->eotf, display_md->eotf);
+			return -1;
+		}
 #endif
-#if 1
-	/* Plan is to allow the content's values as long as monitor can support  */
-	if (display_md->desired_max_ll)
-		out_md->max_cll = MIN(content_md->max_cll, display_md->desired_max_ll);
-	else
-		out_md->max_cll = content_md->max_cll;
+#if 0
+		/* Plan is to allow the content's values as long as monitor can support  */
+		if (display_md->desired_max_ll)
+			out_md->max_cll = MIN(content_md->max_cll, display_md->desired_max_ll);
+		else
+			out_md->max_cll = content_md->max_cll;
 
-	if (display_md->desired_max_fall)
-		out_md->max_fall = MIN(content_md->max_fall, display_md->desired_max_ll);
-	else
-		out_md->max_fall = content_md->max_fall;
+		if (display_md->desired_max_fall)
+			out_md->max_fall = MIN(content_md->max_fall, display_md->desired_max_ll);
+		else
+			out_md->max_fall = content_md->max_fall;
 
-	out_md->max_mastering_luminance = content_md->max_luminance;
-	out_md->min_mastering_luminance = content_md->min_luminance;
-	out_md->eotf = EOTF_ET1_GAMMA_HDR_LUM;//EOTF_ET2_SMPTE_2084_LUM;
-	out_md->white_point_x = content_md->white_point_x;
-	out_md->white_point_y = content_md->white_point_y;
-	out_md->primary_r_x = content_md->display_primary_r_x;
-	out_md->primary_r_y = content_md->display_primary_r_y;
-	out_md->primary_g_x = content_md->display_primary_g_x;
-	out_md->primary_g_y = content_md->display_primary_g_y;
-	out_md->primary_b_x = content_md->display_primary_b_x;
-	out_md->primary_b_y = content_md->display_primary_b_y;
+		out_md->max_mastering_luminance = content_md->max_luminance;
+		out_md->min_mastering_luminance = content_md->min_luminance;
+		out_md->eotf = EOTF_ET1_GAMMA_HDR_LUM;//EOTF_ET2_SMPTE_2084_LUM;
+		out_md->white_point_x = content_md->white_point_x;
+		out_md->white_point_y = content_md->white_point_y;
+		out_md->primary_r_x = content_md->display_primary_r_x;
+		out_md->primary_r_y = content_md->display_primary_r_y;
+		out_md->primary_g_x = content_md->display_primary_g_x;
+		out_md->primary_g_y = content_md->display_primary_g_y;
+		out_md->primary_b_x = content_md->display_primary_b_x;
+		out_md->primary_b_y = content_md->display_primary_b_y;
 #else
-	out_md->max_cll = MIN_IF_NT_ZERO(content_md->max_cll, 
-		display_md->desired_max_ll);
-	out_md->max_fall = MIN_IF_NT_ZERO(content_md->max_fall, 
-		display_md->desired_max_fall);
-	out_md->max_mastering_luminance = content_md->max_luminance;
-	out_md->min_mastering_luminance = content_md->min_luminance;
-	out_md->white_point_x = MIN_IF_NT_ZERO(content_md->white_point_x, 
-		display_md->white_point_x);
-	out_md->white_point_x = MIN_IF_NT_ZERO(content_md->white_point_y,
-		display_md->white_point_y);
-	out_md->primary_r_x = MIN_IF_NT_ZERO(content_md->display_primary_r_x,
-		display_md->display_primary_r_x);
-	out_md->primary_r_y = MIN_IF_NT_ZERO(content_md->display_primary_r_y,
-		display_md->display_primary_r_y);
-	out_md->primary_g_x = MIN_IF_NT_ZERO(content_md->display_primary_g_x,
-		display_md->display_primary_g_x);
-	out_md->primary_g_y = MIN_IF_NT_ZERO(content_md->display_primary_g_y,
-		display_md->display_primary_g_y);
-	out_md->primary_b_x = MIN_IF_NT_ZERO(content_md->display_primary_b_x,
-		display_md->display_primary_b_x);
-	out_md->primary_b_y = MIN_IF_NT_ZERO(content_md->display_primary_b_y,
-		display_md->display_primary_b_y);
-	out_md->eotf = 2;//EOTF_ET2_SMPTE_2084_LUM;
+		out_md->max_cll = MIN_IF_NT_ZERO(content_md->max_cll, 
+			display_md->desired_max_ll);
+		out_md->max_fall = MIN_IF_NT_ZERO(content_md->max_fall, 
+			display_md->desired_max_fall);
+		out_md->max_mastering_luminance = content_md->max_luminance;
+		out_md->min_mastering_luminance = content_md->min_luminance;
+		out_md->white_point_x = MIN_IF_NT_ZERO(content_md->white_point_x, 
+			display_md->white_point_x);
+		out_md->white_point_x = MIN_IF_NT_ZERO(content_md->white_point_y,
+			display_md->white_point_y);
+		out_md->primary_r_x = MIN_IF_NT_ZERO(content_md->display_primary_r_x,
+			display_md->display_primary_r_x);
+		out_md->primary_r_y = MIN_IF_NT_ZERO(content_md->display_primary_r_y,
+			display_md->display_primary_r_y);
+		out_md->primary_g_x = MIN_IF_NT_ZERO(content_md->display_primary_g_x,
+			display_md->display_primary_g_x);
+		out_md->primary_g_y = MIN_IF_NT_ZERO(content_md->display_primary_g_y,
+			display_md->display_primary_g_y);
+		out_md->primary_b_x = MIN_IF_NT_ZERO(content_md->display_primary_b_x,
+			display_md->display_primary_b_x);
+		out_md->primary_b_y = MIN_IF_NT_ZERO(content_md->display_primary_b_y,
+			display_md->display_primary_b_y);
+		out_md->eotf = EOTF_ET1_GAMMA_HDR_LUM;//EOTF_ET2_SMPTE_2084_LUM;
 #endif
 
-	out_md->metadata_type = 1;
+		out_md->metadata_type = 1;
+	} else {
+		out_md->max_cll = display_md->desired_max_ll;
+		out_md->max_fall = display_md->desired_max_fall;
+		out_md->max_mastering_luminance = display_md->desired_max_ll;
+		out_md->min_mastering_luminance = display_md->desired_min_ll;
+		out_md->white_point_x = display_md->white_point_x;
+		out_md->white_point_x = display_md->white_point_y;
+		out_md->primary_r_x = display_md->display_primary_r_x;
+		out_md->primary_r_y = display_md->display_primary_r_y;
+		out_md->primary_g_x = display_md->display_primary_g_x;
+		out_md->primary_g_y = display_md->display_primary_g_y;
+		out_md->primary_b_x = display_md->display_primary_b_x;
+		out_md->primary_b_y = display_md->display_primary_b_y;
+		out_md->eotf = EOTF_ET1_GAMMA_HDR_LUM;//EOTF_ET2_SMPTE_2084_LUM;
+	}
+
 	drm_print_metadata(content_md, display_md, out_md);
 	return 0;
 }
-
 
 static void
 drm_set_color_primaries(const uint8_t *edid,
@@ -224,7 +266,7 @@ drm_get_display_clrspace(const uint8_t *edid, uint32_t edid_len)
 			EDID_CEA_TAG_COLORIMETRY);
 	if (clr_db && data_len != 0)
 		/* db[4] bit 7 is DCI-P3 support information (added in CTA-861-G) */
-		clrspaces = ((clr_db[4] & 0x80) << 8) | (clr_db[3]);
+		clrspaces = ((clr_db[3] & 0x80) << 8) | (clr_db[2]);
 
 	return clrspaces;
 }

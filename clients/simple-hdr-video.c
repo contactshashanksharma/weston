@@ -333,7 +333,7 @@ subtitle_redraw_handler(struct widget *widget, void *data)
 	wl_surface_commit(surface);
 	buffer->busy = 1;
 
-	/* widget_schedule_redraw(sub->widget); */
+	widget_schedule_redraw(sub->widget);
 }
 
 static struct subtitle *
@@ -493,21 +493,20 @@ video_next_buffer(struct video *s)
 static void
 copy_420p10_to_p010(struct buffer *buffer, AVFrame *frame)
 {
-#define SCALE(x) 65535.0f * x / 1023.0f
-//#define SCALE(x) x
 	int height, linesize;
 	uint16_t *yplane, *dsty, *uplane, *vplane, *dstuv;
+	int size;
 
 	// copy plane 0
 	height = buffer->height;
 	yplane = (uint16_t *) frame->data[0];
 	dsty = (uint16_t *) buffer->mmap;
 	linesize = frame->linesize[0];
-	int size = (linesize * height) / 2;
 
-	//XXX:TODO Separate input and output stride
-	for (int i = 0; i < size; i++) {
-		dsty[i] = SCALE(yplane[i]);
+	for (;height > 0; height--) {
+		memcpy(dsty, yplane, linesize);
+		dsty += buffer->stride / 2;
+		yplane += linesize / 2;
 	}
 
 	// copy plane 1 and 2 alternatingly from source
@@ -523,8 +522,8 @@ copy_420p10_to_p010(struct buffer *buffer, AVFrame *frame)
 
 	// copy u, v alternatingly
 	for (int i = 0; i < size; i++) {
-		dstuv[2 * i] = SCALE(uplane[i]);
-		dstuv[(2 * i) + 1] = SCALE(vplane[i]);
+		dstuv[2 * i] = uplane[i];
+		dstuv[(2 * i) + 1] = vplane[i];
 	}
 }
 
