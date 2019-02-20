@@ -1389,7 +1389,7 @@ drm_fb_get_from_vasurf(struct drm_va_display *d,
 	#if 0
 	if (fb->format->format != DRM_FORMAT_ARGB2101010)
 	#endif
-	if (fb->height == 1000 && fb->width == 200)
+	if (fb->width == 1000 && fb->height == 200)
 		fb->format = &ARGB8;
 	else
 		fb->format = &XBGR10;
