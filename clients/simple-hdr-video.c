@@ -257,7 +257,7 @@ create_layout(cairo_t *cr, const char *title)
 
 	layout = pango_cairo_create_layout(cr);
 	pango_layout_set_text(layout, title, -1);
-	desc = pango_font_description_from_string("Sans Bold 15");
+	desc = pango_font_description_from_string("Sans Bold 19");
 	pango_layout_set_font_description(layout, desc);
 	pango_font_description_free(desc);
 	pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
@@ -275,7 +275,7 @@ fill_subtitle(struct buffer *buffer)
 {
 	cairo_surface_t *surface;
 	cairo_t* cr;
-	char *title = "Hello world";
+	char *title = "This is a sample subtitle, please do not expect much :)";
 	PangoLayout *title_layout;
 
 	assert(buffer->mmap);
@@ -332,8 +332,7 @@ subtitle_redraw_handler(struct widget *widget, void *data)
 	wl_surface_damage(surface, 0, 0, allocation.width, allocation.height);
 	wl_surface_commit(surface);
 	buffer->busy = 1;
-
-	/* widget_schedule_redraw(sub->widget); */
+	widget_schedule_redraw(sub->widget);
 }
 
 static struct subtitle *

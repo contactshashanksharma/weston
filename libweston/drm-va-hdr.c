@@ -85,8 +85,10 @@ static void drm_va_destroy_buffer(VADisplay dpy,VABufferID buffer_id)
 
 void drm_va_destroy_display(struct drm_va_display *d)
 {
-	if (d->pparam_buf_id != VA_INVALID_ID)
+	if (d->output_surf_id != VA_INVALID_ID)
 		drm_va_destroy_surface(d->va_display, d->output_surf_id);
+	if (d->output_subsurf_id != VA_INVALID_ID)
+		drm_va_destroy_surface(d->va_display, d->output_subsurf_id);
 	if (d->pparam_buf_id != VA_INVALID_ID)
 		drm_va_destroy_buffer(d->va_display, d->pparam_buf_id);
 	if (d->cfg_id != VA_INVALID_ID)
@@ -144,13 +146,15 @@ drm_va_create_surface_from_fb(struct drm_va_display *d,
 	VASurfaceID surface;
 	VASurfaceAttribExternalBuffers external;
 	VASurfaceAttrib attribs[2];
-#if 1
 	uint32_t surf_fourcc  = VA_FOURCC('P', '0', '1', '0');
-	uint32_t surf_format  = VA_RT_FORMAT_YUV420;
-#else
-	uint32_t surf_fourcc  = VA_FOURCC_P010;
 	uint32_t surf_format  = VA_RT_FORMAT_YUV420_10;
-#endif
+
+	/* We support only P010 or RGB32 currently */
+	if (fb->format->format != DRM_FORMAT_P010) {
+		surf_fourcc  = VA_FOURCC_ARGB;
+		surf_format  = VA_RT_FORMAT_RGB32;
+		weston_log("Shashank: Subtitle buffer, size%dx%d\n", fb->width, fb->height);
+	}
 
 	ret = drmPrimeHandleToFD(fb->fd, fb->handles[0], DRM_CLOEXEC, &prime_fd);
 	if (ret) {
@@ -551,18 +555,14 @@ drm_va_tone_map(struct drm_va_display *d,
 	int ret = 0;
 	VAStatus va_status = VA_STATUS_SUCCESS;
 	VASurfaceID in_surface_id = VA_INVALID_SURFACE;
+	VASurfaceID out_surface_id = VA_INVALID_SURFACE;
 	VARectangle surface_region = {0,};
 	VARectangle output_region = {0,};
 	VADRMPRIMESurfaceDescriptor va_desc = {0,};
 	struct drm_fb *out_fb = NULL;
 
 	if (!d || !fb || !tm) {
-		weston_log_continue("VA: NULL input, VA not initialized ?\n");
-		return NULL;
-	}
-
-	if (fb->format->format != DRM_FORMAT_P010) {
-		weston_log("VA: Current implementation supports P010 format only\n");
+		weston_log_continue("VA: NULL input, d=%p fb=%p tm=%p VA not initialized ?\n", d, fb, tm);
 		return NULL;
 	}
 
@@ -592,16 +592,22 @@ drm_va_tone_map(struct drm_va_display *d,
 	/* Steup target rectangles */
 	drm_va_setup_surfaces(&surface_region, &output_region, fb);
 
+	/* Try to accommodate subtitles or smaller frames in small surface */
+	if (fb->width < 1000 && fb->height < 300)
+		out_surface_id = d->output_subsurf_id;
+	else
+		out_surface_id = d->output_surf_id;
+
 	/* Do the actual magic */
 	va_status = drm_va_process_buffer(d, &surface_region, &output_region,
-		in_surface_id, d->output_surf_id);
+		in_surface_id, out_surface_id);
 	if (va_status != VA_STATUS_SUCCESS) {
 		weston_log("VA: failed to process tone mapping buffer\n");
 		goto clear_buf;
 	}
 
 	/* Get a drm buffer from tone mapped buffer */
-	out_fb = drm_va_create_fb_from_surface(d, d->output_surf_id, &va_desc);
+	out_fb = drm_va_create_fb_from_surface(d, out_surface_id, &va_desc);
 	if (!out_fb)
 		weston_log("VA: Failed to tone map buffer\n");
 
@@ -742,6 +748,8 @@ drm_va_create_display(struct drm_backend *backend)
 	d->cfg_id = VA_INVALID_ID;
 	d->pparam_buf_id = VA_INVALID_ID;
 	d->fparam_buf_id = VA_INVALID_ID;
+	d->output_subsurf_id = VA_INVALID_ID;
+	d->output_surf_id = VA_INVALID_ID;
 
 	if (drm_va_init_display(d)) {
 		weston_log_continue("VA: Init failed\n");
@@ -775,6 +783,12 @@ drm_va_create_display(struct drm_backend *backend)
 	}
 
 	d->output_surf_id = drm_va_create_surface(d, 3840, 2160);
+	if (d->output_surf_id == VA_INVALID_ID) {
+		weston_log_continue("VA: Can't create output surface\n");
+		goto error;
+	}
+
+	d->output_subsurf_id = drm_va_create_surface(d, 1000, 200);
 	if (d->output_surf_id == VA_INVALID_ID) {
 		weston_log_continue("VA: Can't create output surface\n");
 		goto error;

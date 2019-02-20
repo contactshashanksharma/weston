@@ -1400,6 +1400,15 @@ struct weston_pointer_constraint {
 	struct wl_listener surface_activate_listener;
 };
 
+struct weston_color_correction {
+	uint8_t tone_map_mode;
+	uint8_t target_eotf;
+	uint8_t target_cs;
+	uint8_t deg_size;
+	struct weston_hdr_metadata_static target_md;
+	double csc[3][3];
+};	
+
 struct weston_surface {
 	struct wl_resource *resource;
 	struct wl_signal destroy_signal; /* callback argument: this surface */
@@ -1494,6 +1503,7 @@ struct weston_surface {
 
 	struct wl_resource *hdr_surface_resource;
 	struct weston_hdr_metadata *hdr_metadata;
+	struct weston_color_correction cc;
 
 	uint32_t colorspace;
 };

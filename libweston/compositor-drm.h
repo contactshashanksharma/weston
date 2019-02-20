@@ -278,6 +278,7 @@ struct drm_va_display {
 	VABufferID pparam_buf_id;
 	VABufferID fparam_buf_id;
 	VASurfaceID output_surf_id;
+	VASurfaceID output_subsurf_id;
 	VAHdrMetaData output_metadata;
 	VAHdrMetaDataHDR10 out_md_params;
 	VAHdrMetaDataHDR10 in_hdr10_md;
@@ -459,6 +460,7 @@ drm_tone_mapping_mode(struct weston_hdr_metadata *content_md,
 
 int
 drm_prepare_output_hdr_metadata(struct drm_backend *b,
+		struct weston_hdr_metadata *ref_surf_md,
 		struct weston_hdr_metadata *surface_md,
 		struct drm_edid_hdr_metadata_static *display_md,
 		struct drm_hdr_metadata_static *out_md);
