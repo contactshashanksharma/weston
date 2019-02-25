@@ -107,11 +107,7 @@ drm_va_create_fb_from_surface(struct drm_va_display *d,
                         VADRMPRIMESurfaceDescriptor *va_desc)
 {
 	VAStatus status;
-#if 0
-	uint32_t export_flags = VA_EXPORT_SURFACE_SEPARATE_LAYERS |
-#else
 	uint32_t export_flags =  VA_EXPORT_SURFACE_COMPOSED_LAYERS |
-#endif
 			VA_EXPORT_SURFACE_READ_ONLY |
 			VA_EXPORT_SURFACE_WRITE_ONLY;
 
@@ -146,14 +142,16 @@ drm_va_create_surface_from_fb(struct drm_va_display *d,
 	VASurfaceID surface;
 	VASurfaceAttribExternalBuffers external;
 	VASurfaceAttrib attribs[2];
-	uint32_t surf_fourcc  = VA_FOURCC('P', '0', '1', '0');
-	uint32_t surf_format  = VA_RT_FORMAT_YUV420_10;
+	uint32_t surf_fourcc;
+	uint32_t surf_format;
 
-	/* We support only P010 or RGB32 currently */
+	/* We support only P010 (Video) or RGB32(subs) currently */
 	if (fb->format->format != DRM_FORMAT_P010) {
+		surf_fourcc  = VA_FOURCC('P', '0', '1', '0');
+		surf_format  = VA_RT_FORMAT_YUV420_10;
+	} else {
 		surf_fourcc  = VA_FOURCC_ARGB;
 		surf_format  = VA_RT_FORMAT_RGB32;
-		weston_log("Shashank: Subtitle buffer, size%dx%d\n", fb->width, fb->height);
 	}
 
 	ret = drmPrimeHandleToFD(fb->fd, fb->handles[0], DRM_CLOEXEC, &prime_fd);
@@ -191,8 +189,7 @@ drm_va_create_surface_from_fb(struct drm_va_display *d,
 	}
 
 	close(prime_fd);
-	weston_log("VA: Created input surface 0x%x, drm format 0x%x fourcc %s\n",
-		surface, VA_FOURCC_P010, drm_print_format_name(surf_fourcc));
+	weston_log("VA: Created input surface, format 0x%x\n",VA_FOURCC_P010);
 	return surface;
 }
 
@@ -203,25 +200,6 @@ drm_va_create_surface(struct drm_va_display *d,
     VAStatus va_status;
 	VASurfaceID surface_id;
     VASurfaceAttrib surface_attrib;
-#if 0
-	uint32_t surf_fourcc = VA_FOURCC_XRGB; //Fails vaExportSurfaceHandle
-	uint32_t surf_format = VA_RT_FORMAT_RGB32_10;
-
-	uint32_t surf_fourcc = VA_FOURCC_RGBX; //Fails vaExportSurfaceHandle
-	uint32_t surf_format = VA_RT_FORMAT_RGB32_10;
-
-	uint32_t surf_fourcc = VA_FOURCC_RGBA;//Fails vaExportSurfaceHandle
-	uint32_t surf_format = VA_RT_FORMAT_RGB32;
-
-	uint32_t surf_fourcc  = VA_FOURCC_P010;//Fails vaExportSurfaceHandle
-	uint32_t surf_format  = VA_RT_FORMAT_YUV420_10;
-
-	uint32_t surf_fourcc = VA_FOURCC_ARGB; //Fails vaEndPicture
-	uint32_t surf_format = VA_RT_FORMAT_RGB32_10;
-
-	uint32_t surf_fourcc = VA_FOURCC_RGBA; //Success
-	uint32_t surf_format = VA_RT_FORMAT_RGB32_10;
-#endif
 	uint32_t surf_fourcc = VA_FOURCC_RGBA;
 	uint32_t surf_format = VA_RT_FORMAT_RGB32_10;
 
@@ -244,8 +222,7 @@ drm_va_create_surface(struct drm_va_display *d,
 		return VA_INVALID_SURFACE;
 	}
 
-	weston_log_continue("VA: Created output surface 0x%x, format %x fourcc %s\n",
-		surface_id, surf_format, drm_print_format_name(surf_fourcc));
+	weston_log_continue("VA: Created output surface, format %x\n", surf_format);
 	return surface_id;
 }
 

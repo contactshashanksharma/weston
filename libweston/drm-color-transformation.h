@@ -77,6 +77,12 @@ enum drm_tone_map_type {
 };
 
 void
+create_unity_matrix(double result[3][3]);
+
+enum weston_colorspace_enums
+drm_to_weston_colorspace(uint8_t drm_cs);
+
+void
 generate_csc_lut(struct drm_backend *b,
 			double csc_matrix[3][3],
 		    enum drm_colorspace current,

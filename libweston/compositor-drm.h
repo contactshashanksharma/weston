@@ -331,12 +331,6 @@ struct drm_tone_map {
 	struct drm_hdr_metadata_static target_md;
 };
 
-#define weston_log_hdr(fmt, ...) \
-{	\
-	if (ev->surface->hdr_metadata)	\
-		weston_log_continue(fmt); \
-}
-
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
 
 struct drm_format_name {
@@ -347,94 +341,6 @@ struct drm_format_name {
 #ifndef DRM_FORMAT_P010
 #define DRM_FORMAT_P010         fourcc_code('P', '0', '1', '0')
 #endif
-
-static struct drm_format_name format_names[] = {
-	{.format=DRM_FORMAT_C8,.name="FORMAT_C8"},
-	{.format=DRM_FORMAT_R8,.name="FORMAT_R8"},
-	{.format=DRM_FORMAT_R16,.name="FORMAT_R16"},
-	{.format=DRM_FORMAT_RG88,.name="FORMAT_RG88"},
-	{.format=DRM_FORMAT_GR88,.name="FORMAT_GR88"},
-	{.format=DRM_FORMAT_RG1616,.name="FORMAT_RG1616"},
-	{.format=DRM_FORMAT_GR1616,.name="FORMAT_GR1616"},
-	{.format=DRM_FORMAT_RGB332,.name="FORMAT_RGB332"},
-	{.format=DRM_FORMAT_BGR233,.name="FORMAT_BGR233"},
-	{.format=DRM_FORMAT_XRGB4444,.name="FORMAT_XRGB4444"},
-	{.format=DRM_FORMAT_XBGR4444,.name="FORMAT_XBGR4444"},
-	{.format=DRM_FORMAT_RGBX4444,.name="FORMAT_RGBX4444"},
-	{.format=DRM_FORMAT_BGRX4444,.name="FORMAT_BGRX4444"},
-	{.format=DRM_FORMAT_ARGB4444,.name="FORMAT_ARGB4444"},
-	{.format=DRM_FORMAT_ABGR4444,.name="FORMAT_ABGR4444"},
-	{.format=DRM_FORMAT_RGBA4444,.name="FORMAT_RGBA4444"},
-	{.format=DRM_FORMAT_BGRA4444,.name="FORMAT_BGRA4444"},
-	{.format=DRM_FORMAT_XRGB1555,.name="FORMAT_XRGB1555"},
-	{.format=DRM_FORMAT_XBGR1555,.name="FORMAT_XBGR1555"},
-	{.format=DRM_FORMAT_RGBX5551,.name="FORMAT_RGBX5551"},
-	{.format=DRM_FORMAT_BGRX5551,.name="FORMAT_BGRX5551"},
-	{.format=DRM_FORMAT_ARGB1555,.name="FORMAT_ARGB1555"},
-	{.format=DRM_FORMAT_ABGR1555,.name="FORMAT_ABGR1555"},
-	{.format=DRM_FORMAT_RGBA5551,.name="FORMAT_RGBA5551"},
-	{.format=DRM_FORMAT_BGRA5551,.name="FORMAT_BGRA5551"},
-	{.format=DRM_FORMAT_RGB565,.name="FORMAT_RGB565"},
-	{.format=DRM_FORMAT_BGR565,.name="FORMAT_BGR565"},
-	{.format=DRM_FORMAT_RGB888,.name="FORMAT_RGB888"},
-	{.format=DRM_FORMAT_BGR888,.name="FORMAT_BGR888"},
-	{.format=DRM_FORMAT_XRGB8888,.name="FORMAT_XRGB8888"},
-	{.format=DRM_FORMAT_XBGR8888,.name="FORMAT_XBGR8888"},
-	{.format=DRM_FORMAT_RGBX8888,.name="FORMAT_RGBX8888"},
-	{.format=DRM_FORMAT_BGRX8888,.name="FORMAT_BGRX8888"},
-	{.format=DRM_FORMAT_ARGB8888,.name="FORMAT_ARGB8888"},
-	{.format=DRM_FORMAT_ABGR8888,.name="FORMAT_ABGR8888"},
-	{.format=DRM_FORMAT_RGBA8888,.name="FORMAT_RGBA8888"},
-	{.format=DRM_FORMAT_BGRA8888,.name="FORMAT_BGRA8888"},
-	{.format=DRM_FORMAT_XRGB2101010,.name="FORMAT_XRGB2101010"},
-	{.format=DRM_FORMAT_XBGR2101010,.name="FORMAT_XBGR2101010"},
-	{.format=DRM_FORMAT_RGBX1010102,.name="FORMAT_RGBX1010102"},
-	{.format=DRM_FORMAT_BGRX1010102,.name="FORMAT_BGRX1010102"},
-	{.format=DRM_FORMAT_ARGB2101010,.name="FORMAT_ARGB2101010"},
-	{.format=DRM_FORMAT_ABGR2101010,.name="FORMAT_ABGR2101010"},
-	{.format=DRM_FORMAT_RGBA1010102,.name="FORMAT_RGBA1010102"},
-	{.format=DRM_FORMAT_BGRA1010102,.name="FORMAT_BGRA1010102"},
-	{.format=DRM_FORMAT_YUYV,.name="FORMAT_YUYV"},
-	{.format=DRM_FORMAT_YVYU,.name="FORMAT_YVYU"},
-	{.format=DRM_FORMAT_UYVY,.name="FORMAT_UYVY"},
-	{.format=DRM_FORMAT_VYUY,.name="FORMAT_VYUY"},
-	{.format=DRM_FORMAT_AYUV,.name="FORMAT_AYUV"},
-	{.format=DRM_FORMAT_XRGB8888_A8,.name="FORMAT_XRGB8888_A8"},
-	{.format=DRM_FORMAT_XBGR8888_A8,.name="FORMAT_XBGR8888_A8"},
-	{.format=DRM_FORMAT_RGBX8888_A8,.name="FORMAT_RGBX8888_A8"},
-	{.format=DRM_FORMAT_BGRX8888_A8,.name="FORMAT_BGRX8888_A8"},
-	{.format=DRM_FORMAT_RGB888_A8,.name="FORMAT_RGB888_A8"},
-	{.format=DRM_FORMAT_BGR888_A8,.name="FORMAT_BGR888_A8"},
-	{.format=DRM_FORMAT_RGB565_A8,.name="FORMAT_RGB565_A8"},
-	{.format=DRM_FORMAT_BGR565_A8,.name="FORMAT_BGR565_A8"},
-	{.format=DRM_FORMAT_NV12,.name="FORMAT_NV12"},
-	{.format=DRM_FORMAT_NV21,.name="FORMAT_NV21"},
-	{.format=DRM_FORMAT_NV16,.name="FORMAT_NV16"},
-	{.format=DRM_FORMAT_NV61,.name="FORMAT_NV61"},
-	{.format=DRM_FORMAT_NV24,.name="FORMAT_NV24"},
-	{.format=DRM_FORMAT_NV42,.name="FORMAT_NV42"},
-	{.format=DRM_FORMAT_YUV410,.name="FORMAT_YUV410"},
-	{.format=DRM_FORMAT_YVU410,.name="FORMAT_YVU410"},
-	{.format=DRM_FORMAT_YUV411,.name="FORMAT_YUV411"},
-	{.format=DRM_FORMAT_YVU411,.name="FORMAT_YVU411"},
-	{.format=DRM_FORMAT_YUV420,.name="FORMAT_YUV420"},
-	{.format=DRM_FORMAT_YVU420,.name="FORMAT_YVU420"},
-	{.format=DRM_FORMAT_YUV422,.name="FORMAT_YUV422"},
-	{.format=DRM_FORMAT_YVU422,.name="FORMAT_YVU422"},
-	{.format=DRM_FORMAT_YUV444,.name="FORMAT_YUV444"},
-	{.format=DRM_FORMAT_YVU444,.name="FORMAT_YVU444"},
-	{.format=DRM_FORMAT_P010,.name="FORMAT_P010"},
-};
-
-static const char *drm_print_format_name(uint32_t format)
-{
-	uint32_t i;
-
-	for (i = 0; i < ARRAY_SIZE(format_names); i++)
-		if (format == format_names[i].format)
-			return format_names[i].name;
-	return NULL;
-}
 
 enum drm_colorspace {
 	DRM_COLORSPACE_INVALID,

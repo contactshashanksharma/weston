@@ -42,24 +42,9 @@
 
 #include "weston-debug.h"
 #include "shared/helpers.h"
+#include "shared/colorspace.h"
 #include "compositor-drm.h"
-
-#if 0
-struct drm_color_ctm {
-	/* Conversion matrix in S31.32 format. */
-	__s64 matrix[9];
-};
-
-struct drm_color_lut {
-	/*
-	 * Data is U0.16 fixed point format.
-	 */
-	__u16 red;
-	__u16 green;
-	__u16 blue;
-	__u16 reserved;
-};
-#endif
+#include "drm-color-transformation.h"
 
 struct chromaticity {
 	double x;		// CIE1931 x
@@ -74,7 +59,19 @@ struct colorspace {
 	struct chromaticity blue;
 };
 
-#if 1
+enum weston_colorspace_enums
+drm_to_weston_colorspace(uint8_t drm_cs)
+{
+	if (drm_cs == DRM_COLORSPACE_REC709)
+		return WESTON_CS_BT709;
+	if (drm_cs == DRM_COLORSPACE_REC2020)
+		return WESTON_CS_BT2020;
+	if (drm_cs == DRM_COLORSPACE_DCIP3)
+		return WESTON_CS_DCI_P3;
+
+	return WESTON_CS_UNDEFINED;
+}
+
 static double
 matrix_determinant_3x3(double matrix[3][3])
 {
@@ -360,15 +357,6 @@ create_709_to_DCIP3_matrix(double result[3][3])
 	create_gamut_scaling_matrix(&bt709, &dcip3, result);
 }
 
-static void
-create_unity_matrix(double result[3][3])
-{
-	memset(result, 0, 9 * sizeof(double));
-	result[0][0] = 1.0;
-	result[1][1] = 1.0;
-	result[2][2] = 1.0;
-}
-
 /* This function is just for the sake of completion of array */
 static void
 noop_invalid_matrix(double result[3][3])
@@ -376,17 +364,20 @@ noop_invalid_matrix(double result[3][3])
 	return;
 }
 
-/* This function is just for the sake of completion of array */
-static void
-noop_unity_matrix(double result[3][3])
-{
+void
+create_unity_matrix(double result[3][3])
+{	
+	memset(result, 0, 9 * sizeof(double));
+	result[0][0] = 1.0;
+	result[1][1] = 1.0;
+	result[2][2] = 1.0;
 	return;
 }
 
 /* Array of function ptrs which generate CSC matrix */
 void (*generate_csc_fptrs[][DRM_COLORSPACE_MAX])(double[3][3]) = {
 	[DRM_COLORSPACE_REC709][DRM_COLORSPACE_REC709] =
-		noop_unity_matrix,
+		create_unity_matrix,
 	[DRM_COLORSPACE_REC709][DRM_COLORSPACE_DCIP3] =
 		create_709_to_DCIP3_matrix,
 	[DRM_COLORSPACE_REC709][DRM_COLORSPACE_REC2020] =
@@ -402,7 +393,7 @@ void (*generate_csc_fptrs[][DRM_COLORSPACE_MAX])(double[3][3]) = {
 	[DRM_COLORSPACE_REC2020][DRM_COLORSPACE_DCIP3] =
 		create_2020_to_DCIP3_matrix,
 	[DRM_COLORSPACE_REC2020][DRM_COLORSPACE_REC2020] =
-		noop_unity_matrix,
+		create_unity_matrix,
 };
 
 /* Generate LUT for gamut mapping */
@@ -422,9 +413,7 @@ generate_csc_lut(struct drm_backend *b,
 
 	generate_csc_matrix_fn(csc_matrix);
 }
-#endif
 
-#if 1
 static double 
 OETF_2084(double input, double src_max_luminance)
 {
@@ -473,7 +462,7 @@ generate_OETF_2084_lut(struct drm_backend *b,
 
 	return lut;
 }
-#endif
+
 static double
 EOTF_2084(double input)
 {
@@ -536,7 +525,7 @@ generate_gamma_lut(struct drm_backend *b,
 
 	lut = malloc(lut_size * sizeof(struct drm_color_lut));
 	if (!lut) {
-		weston_log("\t\t[state] invalid input/output colorspace\n");
+		weston_log("\t\t[state] OOM creating gamma lut\n");
 		return NULL;
 	}
 

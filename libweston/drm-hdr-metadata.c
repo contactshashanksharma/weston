@@ -104,7 +104,8 @@ static void drm_print_metadata(struct weston_hdr_metadata_static *s,
 	weston_log("========= END ===========\n");
 }
 
-void drm_print_display_metadata(struct drm_edid_hdr_metadata_static *md)
+static void
+drm_print_display_metadata(struct drm_edid_hdr_metadata_static *md)
 {
 	int count = 0;
 
@@ -112,7 +113,10 @@ void drm_print_display_metadata(struct drm_edid_hdr_metadata_static *md)
 		weston_log("\n");
 		weston_log_continue("=============== HDR Static md details:=====================\n");
 		weston_log_continue("\t|EOTF=0x%x\n \t|mdtype=0x%x\n \t|max_l=%d nits\n \t|min_l=%d nits\n",
-			md->eotf, md->metadata_type, md->desired_max_ll, md->desired_min_ll);
+			(unsigned int)md->eotf,
+			(unsigned int)md->metadata_type,
+			(unsigned int)md->desired_max_ll,
+			(unsigned int)md->desired_min_ll);
 
 		if (md->eotf) {
 			for (count = 1; count <= 32; count <<= 1)
@@ -223,9 +227,6 @@ drm_get_hdr_static_metadata(const uint8_t *hdr_db, uint32_t data_len)
 		s->desired_max_ll = hdr_db[2];
 		s->desired_max_fall = hdr_db[3];
 		s->desired_min_ll = hdr_db[4];
-
-		if (!s->desired_max_ll)
-			s->desired_max_ll = 0xFF;
 	}
 	return s;
 }
@@ -268,7 +269,7 @@ drm_get_hdr_metadata(const uint8_t *edid, uint32_t edid_len)
 		}
 
 		drm_set_color_primaries(edid, md);
-		drm_print_display_metadata(&md);
+		drm_print_display_metadata(md);
 		weston_log("Found static HDR metadata in EDID\n");
 	}
 

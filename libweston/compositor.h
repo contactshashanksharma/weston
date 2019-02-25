@@ -1401,13 +1401,14 @@ struct weston_pointer_constraint {
 };
 
 struct weston_color_correction {
-	uint8_t tone_map_mode;
-	uint8_t target_eotf;
-	uint8_t target_cs;
 	uint8_t deg_size;
+	uint8_t target_eotf;
+	uint8_t tone_map_mode;
+	enum weston_colorspace_enums target_cs;
 	struct weston_hdr_metadata_static target_md;
 	double csc[3][3];
-};	
+	bool valid;
+};
 
 struct weston_surface {
 	struct wl_resource *resource;

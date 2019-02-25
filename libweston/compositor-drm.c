@@ -67,7 +67,6 @@
 #include "linux-dmabuf.h"
 #include "linux-dmabuf-unstable-v1-server-protocol.h"
 #include "drm-color-transformation.h"
-#include "hdr-edids.h"
 
 #ifndef DRM_CLIENT_CAP_ASPECT_RATIO
 #define DRM_CLIENT_CAP_ASPECT_RATIO	4
@@ -997,7 +996,6 @@ drm_fb_addfb(struct drm_backend *b, struct drm_fb *fb)
 						 fb->offsets, mods, &fb->fb_id,
 						 DRM_MODE_FB_MODIFIERS);
 #endif
-		weston_log_continue("Shashank: AddFb2Mod returning %d\n", ret);
 		return ret;
 	}
 
@@ -1007,7 +1005,6 @@ drm_fb_addfb(struct drm_backend *b, struct drm_fb *fb)
 	if (ret == 0)
 		return 0;
 
-	weston_log_continue("Shashank: AddFb2 failed (%d) trying addfb\n", ret);
 	/* Legacy AddFB can't always infer the format from depth/bpp alone, so
 	 * check if our format is one of the lucky ones. */
 	if (!fb->format->depth || !fb->format->bpp)
@@ -1020,8 +1017,6 @@ drm_fb_addfb(struct drm_backend *b, struct drm_fb *fb)
 	ret = drmModeAddFB(fb->fd, fb->width, fb->height,
 			   fb->format->depth, fb->format->bpp,
 			   fb->strides[0], fb->handles[0], &fb->fb_id);
-	weston_log_continue("Shashank: AddFb %s ret=%d\n", (ret == 0 ? 
-		"success" : "failed"), ret);
 	return ret;
 }
 
@@ -1257,22 +1252,30 @@ err_free:
 	return NULL;
 }
 
-void drm_print_fb_desc(struct drm_fb *fb)
+static void
+drm_print_fb_desc(struct drm_fb *fb)
 {
 	weston_log_continue("VA: Tone mapped fb\n");
-	weston_log_continue("VA: format:0x%x (%s) bpp:%d name:%s num_planes:%d\n",
-			fb->format->format, drm_print_format_name(fb->format->format),
-			fb->format->bpp, fb->format->drm_format_name, fb->num_planes);
+	weston_log_continue("VA: format:0x%x bpp:%d name:%s num_planes:%d\n",
+			fb->format->format,
+			fb->format->bpp,
+			fb->format->drm_format_name,
+			fb->num_planes);
 }
 
-void drm_print_va_desc(VADRMPRIMESurfaceDescriptor *vad)
+static void
+drm_print_va_desc(VADRMPRIMESurfaceDescriptor *vad)
 {
 	uint32_t i;
 
 	weston_log_continue("******************** VA DESC ********************\n");
-	weston_log_continue("VA: va_fourcc:0x%x(%s) w:%d h:%d num_o:%d num_lay:%d\n",
-		vad->fourcc, drm_print_format_name(vad->fourcc),vad->width, vad->height,
-		vad->num_objects, vad->num_layers);
+	weston_log_continue("VA: va_fourcc:0x%x w:%d h:%d num_o:%d num_lay:%d\n",
+		vad->fourcc,
+		vad->width,
+		vad->height,
+		vad->num_objects,
+		vad->num_layers);
+
 	for (i = 0; i < vad->num_objects; i++) {
 		weston_log_continue("VA: obj %d: fd:%x sz=%d for_mod:0x%lx\n", i, 
 			vad->objects[i].fd, vad->objects[i].size, 
@@ -1281,10 +1284,8 @@ void drm_print_va_desc(VADRMPRIMESurfaceDescriptor *vad)
 
 	for (i = 0; i < vad->num_layers; i++) {
 		uint32_t j;
-		weston_log_continue("VA: layer %d: drm fourcc: 0x%x(%s) num_planes %d\n",
-			i, vad->layers[i].drm_format, 
-			drm_print_format_name(vad->layers[i].drm_format),
-			vad->layers[i].num_planes);
+		weston_log_continue("VA: layer %d: drm fourcc: 0x%x num_planes %d\n",
+			i, vad->layers[i].drm_format, vad->layers[i].num_planes);
 		for (j = 0; j < vad->layers[i].num_planes; j++) {
 			weston_log_continue("\tVA:plane %d: offset 0x%x pitch %d index 0x%x\n",
 				j, vad->layers[i].offset[j], vad->layers[i].pitch[j], 
@@ -1382,8 +1383,7 @@ drm_fb_get_from_vasurf(struct drm_va_display *d,
 
 #if 1
 	fb->format = pixel_format_get_opaque_substitute(fb->format);
-	weston_log_continue("VA: Fb opaque subs format=0x%x %s\n",
-		fb->format->format, drm_print_format_name(fb->format->format));
+	weston_log_continue("VA: Fb opaque subs format=0x%x\n", fb->format->format);
 
 	/* Hack */
 	#if 0
@@ -1393,8 +1393,7 @@ drm_fb_get_from_vasurf(struct drm_va_display *d,
 		fb->format = &ARGB8;
 	else
 		fb->format = &XBGR10;
-	weston_log_continue("VA: post hack format=0x%x %s\n",
-		fb->format->format, drm_print_format_name(fb->format->format));
+	weston_log_continue("VA: post hack format=0x%x\n", fb->format->format);
 #endif
 
 	prime_fd = va_desc->objects[0].fd;
@@ -1416,24 +1415,13 @@ drm_fb_get_from_vasurf(struct drm_va_display *d,
 	}
 
 	drm_print_fb_desc(fb);
-
-#if 1
-	/* XXX: Todo: get and load opacity information */
 	if (drm_fb_addfb(d->b, fb) != 0) {
 		weston_log("VA: Couldn't add fb\n");
 		goto err_free;
 	}
-#else
-	i = drmModeAddFB2(fb->fd, fb->width, fb->height, fb->format->format,
-			    fb->handles, fb->strides, fb->offsets, &fb->fb_id, 0);
-	if (i != 0) {
-		weston_log("Shashank: AddFb2 for new fb failed, err (%d)\n", i);
-		goto err_free;
-	}
-#endif
 
-	 for (i = 0; i < (int)va_desc->num_objects; i++)
-	 	close(va_desc->objects[i].fd);
+	for (i = 0; i < (int)va_desc->num_objects; i++)
+		close(va_desc->objects[i].fd);
 	return fb;
 
 err_free:
@@ -1797,34 +1785,24 @@ drm_fb_get_from_view(struct drm_output_state *state, struct weston_view *ev)
 	if (ev->alpha != 1.0f)
 		return NULL;
 
-	if (!drm_view_transform_supported(ev, &output->base)){
-		weston_log_hdr("Shashank: No xform");
+	if (!drm_view_transform_supported(ev, &output->base))
 		return NULL;
-	}
 
-	if (!buffer) {
-		weston_log_hdr("Shashank: No buffer");
+	if (!buffer)
 		return NULL;
-	}
 
-	if (wl_shm_buffer_get(buffer->resource)) {
-		weston_log_hdr("Shashank: found SHM buffer");
+	if (wl_shm_buffer_get(buffer->resource))
 		return NULL;
-	}
 
 	/* GBM is used for dmabuf import as well as from client wl_buffer. */
-	if (!b->gbm) {
-		weston_log_hdr("Shashank: No gbm\n");
+	if (!b->gbm)
 		return NULL;
-	}
 
 	dmabuf = linux_dmabuf_buffer_get(buffer->resource);
 	if (dmabuf) {
 		fb = drm_fb_get_from_dmabuf(dmabuf, b, is_opaque);
-		if (!fb) {
-			weston_log_hdr("Shashank: No DMA buffer\n");
+		if (!fb)
 			return NULL;
-		}
 	} else {
 		struct gbm_bo *bo;
 
@@ -1835,7 +1813,6 @@ drm_fb_get_from_view(struct drm_output_state *state, struct weston_view *ev)
 
 		fb = drm_fb_get_from_bo(bo, b, is_opaque, BUFFER_CLIENT);
 		if (!fb) {
-			weston_log_hdr("Shashank: No GBM buf\n");
 			gbm_bo_destroy(bo);
 			return NULL;
 		}
@@ -2663,7 +2640,7 @@ drm_mode_create_property_blob(struct drm_backend *b,
 	int ret;
 
 	if (*blob_id) {
-		ret = drmModeDestroyPropertyBlob(b->drm.fd,*blob_id);
+		ret = drmModeDestroyPropertyBlob(b->drm.fd, *blob_id);
 		if (ret) {
 			weston_log("Failed to destroy old blob %u\n", *blob_id);
 			return ret;
@@ -2683,17 +2660,11 @@ drm_mode_ensure_blob(struct drm_backend *backend, struct drm_mode *mode)
 
         if (mode->blob_id)
 			return 0;
-#if 0
-        ret = drmModeCreatePropertyBlob(backend->drm.fd,
-                                        &mode->mode_info,
-                                        sizeof(mode->mode_info),
-                                        &mode->blob_id);
-#else
+
 		ret = drm_mode_create_property_blob(backend,
 											&mode->mode_info,
 											sizeof(mode->mode_info),	
 											&mode->blob_id);
-#endif
         if (ret != 0)
                 weston_log("failed to create mode property blob: %m\n");
 
@@ -3395,7 +3366,8 @@ drm_setup_plane_csc(struct drm_backend *b,
 	int ret;
 	double csc_lut[3][3];
 	struct drm_plane *plane = ps->plane;
-	enum drm_colorspace content_cs = ps->ev->surface->colorspace;
+	struct weston_surface *surf = ps->ev->surface;
+	enum drm_colorspace content_cs = surf->colorspace;
 
 	if (!plane)
 		return 0;
@@ -3408,7 +3380,7 @@ drm_setup_plane_csc(struct drm_backend *b,
 		plane->csc_blob_id = -1;
 	}
 
-	weston_log("Shashank: Plane CSC blob prepared\n");
+	memcpy(surf->cc.csc, csc_lut, ARRAY_LENGTH(surf->cc.csc) * sizeof(double));
 	return ret;
 }
 
@@ -3430,7 +3402,7 @@ drm_setup_plane_degamma(struct drm_backend *b,
 	else
 		deg_lut = generate_degamma_lut(b, deg_lut_size, 0xffff);
 
-	ret = drm_mode_create_property_blob(b, (const uint8_t *)deg_lut,
+	ret = drm_mode_create_property_blob(b, (uint8_t *)deg_lut,
 						deg_lut_size * sizeof(struct drm_color_lut),
 						&plane->degamma_blob_id);
 	if (ret) {
@@ -3441,30 +3413,27 @@ drm_setup_plane_degamma(struct drm_backend *b,
 	return ret;
 }
 
-#if 0
 static int
 drm_output_setup_gamma(struct drm_backend *b,
 			struct drm_output_state *state,
-			struct drm_edid_hdr_metadata_static *display_md)
+			struct drm_edid_hdr_metadata_static *target_md)
 {
 	struct drm_color_lut *gamma_lut;
 
-	if (display_md)
+	if (target_md)
 		gamma_lut = generate_OETF_2084_lut(b, state->gamma_size, 0xFFFF);
 	else
 		gamma_lut = generate_gamma_lut(b, state->gamma_size, 0xFFFF);
 
 	if (!gamma_lut) {
-		weston_log("Shashank: failed to generate CRTC gamma\n");
 		drm_debug(b, "\t\t[state] Failed to create gamma lut\n");
 		return -1;
 	}
 
-	return drm_mode_create_property_blob(b, (const uint8_t *)gamma_lut,
+	return drm_mode_create_property_blob(b, (uint8_t *)gamma_lut,
 				state->gamma_size * sizeof(*gamma_lut),
 				&state->gamma_blob_id);
 }
-#endif
 
 static struct drm_fb *
 drm_do_tone_mapping(struct drm_output *output,
@@ -3480,11 +3449,9 @@ drm_do_tone_mapping(struct drm_output *output,
 	tm_fb = drm_va_tone_map(output->va_display, fb, surf_md, tm);
 	if (!tm_fb) {
 		drm_debug(b, "\t\t\t\t[overlay] Tone mapping failed\n");
-		weston_log("Shashank: Tone mapping failed\n");
 		return NULL;
 	}
 
-	weston_log("Shashank: Tone mapping done\n");
 	return tm_fb;
 }
 
@@ -3507,46 +3474,6 @@ drm_load_weston_md(struct weston_hdr_metadata_static *wmd,
 	wmd->min_luminance = dmd->min_mastering_luminance;
 }
 
-/* There is a possibility that we couldn't use display engine and we
-* might have to fall to GL render. Keep the color correction data saved
-* for such cases */
-static void
-drm_save_plane_color_state(struct drm_plane_state *ps,
-		struct drm_tone_map *tm)
-{
-	struct drm_plane *plane = ps->plane;
-	struct weston_view *ev;
-	struct weston_surface *surface;
-	struct weston_color_correction *cc;
-	drmModePropertyBlobPtr blob;
-
-	if (!plane)
-		return;
-
-	ev = ps->ev;
-	if (!ev)
-		return;
-
-	surface = ev->surface;
-	if (!surface)
-		return;
-
-	cc = &surface->cc;
-	cc->tone_map_mode = tm->tone_map_mode;
-	cc->target_eotf = tm->target_eotf;
-	cc->target_cs = tm->target_cs;
-	drm_load_weston_md(&cc->target_md, &tm->target_md);
-
-	blob = drmModeGetPropertyBlob(plane->backend->drm.fd, plane->csc_blob_id);
-	if (!blob || !blob->length) {
-		weston_log("Can't get CSC blob to save\n");
-		return;
-	}
-
-	memcpy(cc->csc, blob->data, sizeof(cc->csc));
-	drmModeFreePropertyBlob(blob);
-}
-
 /*
 * We are going to blend multiple planes, but there is a possibility that
 * one or more of the surfaces are in BT2020 colorspace (Like a HDR
@@ -3567,34 +3494,25 @@ drm_prepare_plane_for_blending(struct drm_backend *b,
 	struct drm_plane *plane = ps->plane;
 	enum drm_colorspace target = tm->target_cs;
 
-	if (!plane) {
-		weston_log("Shashank: No plane to blend ?\n");
+	if (!plane)
 		return 0;
-	}
 
 	if (plane->degamma_blob_size) {
 		ret = drm_setup_plane_degamma(b, ps, plane->degamma_blob_size);
 		if (ret) {
-			weston_log("Shashank: failed to set plane degamma\n");
 			drm_debug(b, "\t\t[state] Failed to apply plane degamma\n");
 			return ret;
 		}
-
-		weston_log("Shashank: success preparing deg blob, sz=%ld\n",
-			plane->degamma_blob_size);
 	}
 
 	if (plane->csc_blob_size) {
 		ret = drm_setup_plane_csc(b, ps, target);
 		if (ret) {
-			weston_log("Shashank: failed to set plane csc\n");
 			drm_debug(b, "\t\t[state] Failed to apply plane degamma\n");
 			return -1;
 		}
 	}
 
-	drm_save_plane_color_state(ps, tm);
-	weston_log("Shashank: success preparing CSC blob\n");
 	return 0;
 }
 
@@ -3615,9 +3533,6 @@ drm_prepare_plane_colorspace(struct drm_backend *b,
 	if (!surf)
 		return 0;
 
-	weston_log("Shashank: preparing %s plane to blend\n",
-		plane_type_enums[p->type].name);
-
 	if (surf->colorspace <= DRM_COLORSPACE_INVALID ||
 		surf->colorspace >= DRM_COLORSPACE_MAX)
 		surf->colorspace = DRM_COLORSPACE_REC709;
@@ -3625,7 +3540,6 @@ drm_prepare_plane_colorspace(struct drm_backend *b,
 	if (surf->colorspace != tm->target_cs) {
 		ret = drm_prepare_plane_for_blending(b, ps, tm);
 		if (ret) {
-			weston_log("Shashank: Failed to prepare plane for blend\n");
 			drm_debug(b, "\t\t[state] Failed to prepare plane for CSC\n");
 			return ret;
 		}
@@ -3635,7 +3549,7 @@ drm_prepare_plane_colorspace(struct drm_backend *b,
 	return 0;
 }
 
-struct drm_plane_state *
+static struct drm_plane_state *
 drm_output_prepare_overlay_view(struct drm_output_state *output_state,
 				struct weston_view *ev,
 				enum drm_output_propose_state_mode mode,
@@ -3663,7 +3577,6 @@ drm_output_prepare_overlay_view(struct drm_output_state *output_state,
 	if (!fb) {
 		drm_debug(b, "\t\t\t\t[overlay] not placing view %p on overlay: "
 			     " couldn't get fb\n", ev);
-		weston_log_hdr("Shashank: No fb from view\n");
 		return NULL;
 	}
 
@@ -3689,18 +3602,13 @@ drm_output_prepare_overlay_view(struct drm_output_state *output_state,
 
 			if (p->formats[i].format != fb->format->format)
 				continue;
-
-			weston_log_hdr("Shashank: Found format/plane match\n")
-
 			if (fb->modifier == DRM_FORMAT_MOD_INVALID ||
 					fb->modifier == DRM_FORMAT_MOD_LINEAR)
 				break;
 
 			for (j = 0; j < p->formats[i].count_modifiers; j++) {
-				if (p->formats[i].modifiers[j] == fb->modifier) {
-					weston_log_hdr("Shashank: Found fb/plane modifier match\n");
+				if (p->formats[i].modifiers[j] == fb->modifier)
 					break;
-				}
 			}
 			if (j != p->formats[i].count_modifiers)
 				break;
@@ -3713,12 +3621,10 @@ drm_output_prepare_overlay_view(struct drm_output_state *output_state,
 
 		state->ev = ev;
 		state->output = output;
-		weston_log_hdr("Shashank: Found plane state\n");
 		
 		if (!drm_plane_state_coords_for_view(state, ev)) {
 			drm_debug(b, "\t\t\t\t[overlay] not placing view %p on overlay: "
 				     "unsuitable transform\n", ev);
-			weston_log_hdr("Shashank: co-ordinates, putting back plane\n");
 			drm_plane_state_put_back(state);
 			state = NULL;
 			continue;
@@ -3728,8 +3634,6 @@ drm_output_prepare_overlay_view(struct drm_output_state *output_state,
 		     state->src_h != state->dest_h << 16)) {
 			drm_debug(b, "\t\t\t\t[overlay] not placing view %p on overlay: "
 				     "no scaling without atomic\n", ev);
-			weston_log_continue("Shashank: Src dim(%dx%d) mismatch dest(%dx%d)\n",
-					state->src_w, state->src_h, state->dest_w, state->dest_h);
 			drm_plane_state_put_back(state);
 			state = NULL;
 			continue;
@@ -3738,7 +3642,7 @@ drm_output_prepare_overlay_view(struct drm_output_state *output_state,
 		if (tm) {
 			tm_fb = drm_do_tone_mapping(output, b, ev, fb, tm);
 			if (!tm_fb) {
-				weston_log("Tone mapping failed\n");
+				drm_debug(b, "\t\t\t\t[overlay] Tone mapping failed\n");
 				return NULL;
 			}
 
@@ -3746,7 +3650,6 @@ drm_output_prepare_overlay_view(struct drm_output_state *output_state,
 			drm_fb_destroy_dmabuf(fb);
 			drm_fb_set_buffer(tm_fb, ev->surface->buffer_ref.buffer);
 			fb = tm_fb;
-			weston_log_hdr("Shashank: Tone mapping success 2 \n");
 		}
 
 		/* We hold one reference for the lifetime of this function;
@@ -3762,8 +3665,6 @@ drm_output_prepare_overlay_view(struct drm_output_state *output_state,
 				     "view %p on overlay %lu in planes-only mode\n",
 				  ev, (unsigned long) p->plane_id);
 			availability = PLACED_ON_PLANE;
-			if (tm)
-				weston_log_continue("Shashank: Found plane(%d) for hdr fb\n", p->plane_id);
 			goto out;
 		}
 
@@ -3773,15 +3674,12 @@ drm_output_prepare_overlay_view(struct drm_output_state *output_state,
 				     "view %p on overlay %d in mixed mode\n",
 				  ev, p->plane_id);
 			availability = PLACED_ON_PLANE;
-			weston_log_hdr("Shashank: atomic test post plane pickup success\n");
 			goto out;
 		}
 
 		drm_debug(b, "\t\t\t\t[overlay] not placing view %p on overlay %lu "
 			     "in mixed mode: kernel test failed\n",
 			  ev, (unsigned long) p->plane_id);
-
-		weston_log_hdr("Shashank: Atomic check with plane failed\n");
 		drm_plane_state_put_back(state);
 		state = NULL;
 	}
@@ -3790,7 +3688,6 @@ drm_output_prepare_overlay_view(struct drm_output_state *output_state,
 	case NO_PLANES:
 		drm_debug(b, "\t\t\t\t[overlay] not placing view %p on overlay: "
 			     "no free overlay planes\n", ev);
-		weston_log_hdr("Shashank: No available plane\n");
 		break;
 	case NO_PLANES_WITH_FORMAT:
 		drm_debug(b, "\t\t\t\t[overlay] not placing view %p on overlay: "
@@ -3798,14 +3695,9 @@ drm_output_prepare_overlay_view(struct drm_output_state *output_state,
 			     "modifier 0x%llx\n",
 			  ev, (unsigned long) fb->format->format,
 			  (unsigned long long) fb->modifier);
-			weston_log_continue("Shashank: no plane supports format 0x%x(%s)\n",
-				fb->format->format, drm_print_format_name(fb->format->format));
 		break;
 	case NO_PLANES_ACCEPTED:
-		weston_log_hdr("Shashank: no plane accepted format\n");
-		break;
 	case PLACED_ON_PLANE:
-		weston_log_hdr("Shashank: placed on plane\n");
 		break;
 	}
 
@@ -4285,7 +4177,7 @@ drm_prepare_hdr_target(struct drm_backend *b,
 
 	target = zalloc(sizeof(*target));
 	if (!target) {
-		weston_log("Shashank: OOM while creating target\n");
+		weston_log("OOM while creating target\n");
 		return NULL;
 	}
 
@@ -4304,8 +4196,7 @@ drm_prepare_hdr_target(struct drm_backend *b,
 		else if (display_hdr_cs & EDID_CS_DCIP3)
 			target_cs = DRM_COLORSPACE_DCIP3;
 		else
-			weston_log("HDR monitor without wide color gamut support ? 0x%x\n",
-				drm_head->clrspaces);
+			weston_log("Warning: HDR monitor without wide gamut support ?\n");
 	} else {
 
 		if (content_md)
@@ -4320,15 +4211,23 @@ drm_prepare_hdr_target(struct drm_backend *b,
 			drm_head->hdr_md,
 			&target->target_md);
 	if (ret) {
-		weston_log("Shashank: Tone mapping not possible\n");
+		weston_log("Tone mapping not possible\n");
 		return NULL;
 	}
 
 	target->target_eotf = target_eotf;
 	target->target_cs = target_cs;
-	weston_log("Shashank: tone mapping mode %d cs=%d\n",
+	weston_log("Tone mapping target mode %d colorspace=%d\n",
 		target->tone_map_mode, target->target_cs);
 
+	/* Save these transformation details for renderer, in case if we fail to
+	show view using display engine */
+	surf->cc.tone_map_mode = target->tone_map_mode;
+	surf->cc.target_cs = target->target_cs;
+	surf->cc.target_eotf = target->target_eotf;
+	surf->cc.valid = true;
+	create_unity_matrix(surf->cc.csc);
+	drm_load_weston_md(&surf->cc.target_md, &target->target_md);
 	return target;
 }
 
@@ -4339,11 +4238,10 @@ drm_output_propose_hdr_state(struct weston_output *output_base,
 			 struct weston_surface *ref_hdr_surf)
 {
 	int ret;
-	int view_count = 0;
+	struct weston_view *ev;
 	struct drm_output_state *state;
 	struct drm_plane_state *ps = NULL;
 	struct weston_surface *surface = NULL;
-	struct weston_view *ev;
 	struct drm_output *output = to_drm_output(output_base);
 	struct drm_backend *b = to_drm_backend(output->base.compositor);
 	struct weston_head *w_head = weston_output_get_first_head(&output->base);
@@ -4354,8 +4252,7 @@ drm_output_propose_hdr_state(struct weston_output *output_base,
 	state = drm_output_state_duplicate(output->state_cur,
 					   pending_state,
 					   DRM_OUTPUT_STATE_CLEAR_PLANES);
-	/* Currently, only DMA buffers are allowed to be sent on display
-	* HW overlays, so ignore any other buffers in the view */
+
 	wl_list_for_each(ev, &output_base->compositor->view_list, link) {
 		struct weston_buffer *buffer = NULL;
 
@@ -4363,55 +4260,40 @@ drm_output_propose_hdr_state(struct weston_output *output_base,
 		if (!surface)
 			continue;
 
-#if 0 /* Hack to test S2H */
-		if (surface->hdr_metadata)
-			continue;
-#endif
+		/* Currently, only DMA buffers are allowed to be sent on display
+		* HW overlays, so ignore any other buffers in the view */
 		buffer = surface->buffer_ref.buffer;
 		if (!buffer || !linux_dmabuf_buffer_get(buffer->resource)) {
-			weston_log("Skipping non-dma buffer %p/surface %p\n",
+			drm_debug(b, "\t\t[view] Skipping non-dma buffer %p/surface %p\n",
 				buffer, surface);
 			continue;
 		}
 
 		tm_target = drm_prepare_hdr_target(b, ref_hdr_surf, surface, head);
 		if (!tm_target) {
-			weston_log("Failed to create HDR target\n");
+			drm_debug(b, "\t\t[view] Failed to create HDR target\n");
 			return NULL;
 		}
 
-		view_count++;
 		surface->is_opaque = true;
 		ev->alpha = 1.0f;
-		weston_log_continue("Shashank:prep view for dma surf no:%d\n", view_count);
-
-#if 0
-		if (!surface->hdr_metadata) {
-			ps = drm_output_prepare_cursor_view(state, ev);
-			if (ps) {
-				weston_log_continue("Shashank: Cursor placed\n");
-				continue;
-			}
-		}
-#endif
-
 		ps = drm_output_prepare_overlay_view(state, ev,
 				DRM_OUTPUT_PROPOSE_STATE_PLANES_ONLY, tm_target);
 		if (!ps) {
 			drm_debug(b, "\t\t[view] failing state generation: "
 					 "atomic test not OK\n");
-			weston_log_continue("Shashank: Overlay view failed for DMA surface\n");
 			goto err;
 		}
 
 		ret = drm_prepare_plane_colorspace(b, output, ps, tm_target);
 		if (ret) {
-			weston_log("Failed to set plane colorspace for view %d\n", view_count);
+			drm_debug(b, "\t\t[view] Failed to set plane colorspace\n");
+			goto err;
 		}
 	}
 
 	if (!tm_target) {
-		weston_log_continue("Shashank: No DMA buffer for HDR view\n");
+		drm_debug(b, "\t\t[view] No DMA buffer found in HDR view\n");
 		goto err;
 	}
 
@@ -4420,8 +4302,7 @@ drm_output_propose_hdr_state(struct weston_output *output_base,
 					sizeof(tm_target->target_md),
 					&head->hdr_md_blob_id);
 	if (ret) {
-		drm_debug(b, "\t\t\t\t[view] Set HDR blob failed\n");
-		weston_log_continue("Shashank: Failed to set HDR output blob\n");
+		drm_debug(b, "\t\t[view] Set HDR blob failed\n");
 		goto err;
 	}
 
@@ -4430,12 +4311,10 @@ drm_output_propose_hdr_state(struct weston_output *output_base,
 	if (ret != 0) {
 		drm_debug(b, "\t\t[view] failing state generation: "
 			     "atomic test not OK\n");
-		weston_log_continue("Failed the atomic test with state\n");
 		goto err;
 	}
 
 	free(tm_target);
-	weston_log_continue("Shashank: Success: propose HDR state\n");
 	return state;
 
 err:
@@ -4464,16 +4343,14 @@ drm_handle_hdr_view(struct drm_backend *b,
 	struct drm_plane_state *plane_state;
 	struct drm_output_state *state = NULL;
 	struct drm_plane *target_plane = NULL;
-	bool success = false;
+	int ret = -1;
 
-	weston_log_continue("============ Shashank: Start =========\n");
 	state = drm_output_propose_hdr_state(output_base, pending_state, hdr_surface);
 	if (!state) {
-		weston_log("Shashank: propose hdr state failed\n");
-		return -1;
+		drm_debug(b, "\t\t[state] propose hdr state failed\n");
+		return ret;
 	}
 
-	weston_log_continue("Shashank: HDR plane state found, searching target plane\n");
 	wl_list_for_each(ev, &output_base->compositor->view_list, link) {
 		wl_list_for_each(plane_state, &state->plane_list, link) {
 			if (plane_state->ev == ev) {
@@ -4485,25 +4362,19 @@ drm_handle_hdr_view(struct drm_backend *b,
 
 		if (target_plane) {
 			weston_view_move_to_plane(ev, &target_plane->base);
-			drm_debug(b, "\t[repaint] assign HDR plane success "
+			drm_debug(b, "\t\t[state] assign HDR plane success "
 				  "target HDR plane(%d %s)\n", target_plane->plane_id,
 				  plane_type_enums[target_plane->type].name);
-			weston_log_continue("Shashank: Found plane(id:%d,type:%s) to display\n",
-				   target_plane->plane_id,
-				   plane_type_enums[target_plane->type].name);
-			success = true;
+			ret = 0;
 		}
 	}
 
-	if (success) {
-		weston_log_continue("========= Shashank: Success ==============\n");
-		return 0;
+	if (ret) {
+		drm_output_state_free(state);
+		state = NULL;
 	}
 
-	drm_output_state_free(state);
-	state = NULL;
-	weston_log_continue("========= Shashank: Fail ==============\n");
-	return -1;
+	return ret;
 }
 
 static void
@@ -4534,12 +4405,13 @@ drm_assign_planes(struct weston_output *output_base, void *repaint_data)
 
 		ret = drm_handle_hdr_view(b, output_base, hdr_surface, pending_state);
 		if (ret) {
-			weston_log("Handling HDR view failed\n");
+			drm_debug(b, "\t[rapaint] Handling HDR view failed\n");
+			goto try_render_view;
 		}
+
+		drm_debug(b, "\t[rapaint] HDR view successfully handled\n");
 		return;
 	}
-
-assign_normal:
 
 	if (!b->sprites_are_broken && !output->virtual) {
 		drm_debug(b, "\t[repaint] trying planes-only build state\n");
@@ -4560,6 +4432,7 @@ assign_normal:
 		drm_debug(b, "\t[state] no overlay plane support\n");
 	}
 
+try_render_view:
 	if (!state) {
 		mode = DRM_OUTPUT_PROPOSE_STATE_RENDERER_ONLY;
 		state = drm_output_propose_state(output_base, pending_state,
@@ -4990,26 +4863,6 @@ modifiers_ptr(struct drm_format_modifier_blob *blob)
 }
 #endif
 
-static void drm_plane_format_dump(struct drm_plane *plane, int count)
-{
-	int i = 0;
-	weston_log("\n");
-	weston_log_continue("============ Shashank: Plane(%d, %s)formats(%d) =============\n",
-			plane->plane_id, plane_type_enums[plane->type].name, plane->count_formats);
-	while (i < count) {
-		int j;
-		weston_log_continue("Shashank: %d.format=0x%x (%s)\n", i, plane->formats[i].format,
-			drm_print_format_name(plane->formats[i].format));
-		weston_log_continue("Shashank: format modifiers(%d):\n", plane->formats[i].count_modifiers);
-		for (j = 0; j < plane->formats[i].count_modifiers; j++) {
-			weston_log_continue("Shashank: 0x%lx\n", 
-			plane->formats[i].modifiers[j]);
-		}
-		i++;
-	}
-	weston_log_continue("=====================================================\n");
-}
-
 static void
 drm_plane_populate_color_properties(struct drm_plane *plane,
 			const drmModePlane *kplane,
@@ -5023,7 +4876,6 @@ drm_plane_populate_color_properties(struct drm_plane *plane,
 	if (val)
 		plane->degamma_blob_size = val;
 
-#if 1
 	val = drm_property_get_value(&plane->props[WDRM_PLANE_GAMMA_LUT_SZ],
 				         props,
 				         0);
@@ -5036,9 +4888,9 @@ drm_plane_populate_color_properties(struct drm_plane *plane,
 	if (val)
 		/* CSC blob size is fixed across industry */
 		plane->csc_blob_size = 9;
-#endif
-	weston_log("Shashank: Degamma lut sz=%ld Gamma lut sz=%ld\n",
-		plane->degamma_blob_size, plane->gamma_blob_size);
+
+	weston_log("Plane color prop sz: degamma %ld csc %ld gamma %ld\n",
+		plane->degamma_blob_size, plane->csc_blob_size, plane->gamma_blob_size);
 }
 
 /**
@@ -5056,7 +4908,6 @@ drm_plane_populate_formats(struct drm_plane *plane, const drmModePlane *kplane,
 	struct drm_format_modifier *blob_modifiers;
 	uint32_t *blob_formats;
 	uint32_t blob_id;
-	static bool flag = false;
 
 	blob_id = drm_property_get_value(&plane->props[WDRM_PLANE_IN_FORMATS],
 				         props,
@@ -5106,11 +4957,6 @@ drm_plane_populate_formats(struct drm_plane *plane, const drmModePlane *kplane,
 		plane->formats[i].modifiers = modifiers;
 		plane->formats[i].count_modifiers = count_modifiers;
 		
-	}
-
-	if (!flag) {
-		drm_plane_format_dump(plane, i);
-		flag = true;
 	}
 
 	drmModeFreePropertyBlob(blob);
@@ -6193,12 +6039,8 @@ find_and_parse_output_edid(struct drm_head *head,
 			*serial_number = head->edid.serial_number;
 	}
 
-#if 1
 	head->hdr_md =
 		drm_get_hdr_metadata(edid_blob->data, edid_blob->length);
-#else
-	head->hdr_md = drm_get_hdr_metadata(samsung_hdr_edid, 256);
-#endif
 	head->clrspaces =
 		drm_get_display_clrspace(edid_blob->data, edid_blob->length);
 

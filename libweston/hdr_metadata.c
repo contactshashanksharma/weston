@@ -199,14 +199,5 @@ weston_hdr_metadata_setup(struct weston_compositor *compositor)
 			      &zwp_hdr_metadata_v1_interface, 1,
 			      compositor, bind_hdr_metadata))
 		return -1;
-#if 0
-
-	wl_display_add_shm_format(compositor->wl_display, WL_SHM_FORMAT_YUV420_10);
-	wl_display_add_shm_format(compositor->wl_display, WL_SHM_FORMAT_YUV420_12);
-	wl_display_add_shm_format(compositor->wl_display, WL_SHM_FORMAT_YUV420_16);
-	wl_display_add_shm_format(compositor->wl_display, WL_SHM_FORMAT_YVU420_10);
-	wl_display_add_shm_format(compositor->wl_display, WL_SHM_FORMAT_YVU420_12);
-	wl_display_add_shm_format(compositor->wl_display, WL_SHM_FORMAT_YVU420_16);
-#endif
 	return 0;
 }
