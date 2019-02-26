@@ -1411,6 +1411,7 @@ struct weston_color_correction {
 	uint8_t deg_size;
 	uint8_t target_eotf;
 	uint8_t tone_map_mode;
+	uint8_t src_eotf;
 	enum weston_colorspace_enums target_cs;
 	struct weston_hdr_metadata_static target_md;
 	double csc[3][3];

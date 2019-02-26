@@ -3380,7 +3380,8 @@ drm_setup_plane_csc(struct drm_backend *b,
 		plane->csc_blob_id = -1;
 	}
 
-	memcpy(surf->cc.csc, csc_lut, ARRAY_LENGTH(surf->cc.csc) * sizeof(double));
+	/* Save CSC correction data for renderer in case overlay view fails */
+	memcpy(surf->cc.csc, csc_lut, 9 * sizeof(double));
 	return ret;
 }
 
@@ -3453,6 +3454,53 @@ drm_do_tone_mapping(struct drm_output *output,
 	}
 
 	return tm_fb;
+}
+
+static inline enum hdr_metadata_eotf
+to_weston_eotf(enum drm_hdr_eotf_type drm_eotf)
+{
+	switch(drm_eotf) {
+	case DRM_EOTF_SDR_TRADITIONAL:
+		return EOTF_TRADITIONAL_GAMMA_SDR;
+	case DRM_EOTF_HDR_TRADITIONAL:
+		return EOTF_TRADITIONAL_GAMMA_HDR;
+	case DRM_EOTF_HDR_ST2084:
+		return EOTF_ST2084;
+	case DRM_EOTF_HLG_BT2100:
+		return EOTF_HLG;
+	default:
+		return EOTF_TRADITIONAL_GAMMA_SDR;
+	}
+}
+
+static inline enum weston_colorspace_enums
+to_weston_colorspace(enum drm_colorspace drm_cs)
+{
+	switch(drm_cs) {
+	case DRM_COLORSPACE_REC709:
+		return WESTON_CS_BT709;
+	case DRM_COLORSPACE_DCIP3:
+		return WESTON_CS_DCI_P3;
+	case DRM_COLORSPACE_REC2020:
+		return WESTON_CS_BT2020;
+	default:
+		return WESTON_CS_UNDEFINED;
+	}
+}
+
+static inline enum weston_tone_map_mode
+to_weston_tone_map_mode(uint8_t tone_map)
+{
+	switch(tone_map) {
+	case VA_TONE_MAPPING_HDR_TO_HDR:
+		return WESTON_TONE_MAP_HDR_TO_HDR;
+	case VA_TONE_MAPPING_HDR_TO_SDR:
+		return WESTON_TONE_MAP_HDR_TO_SDR;
+	case VA_TONE_MAPPING_SDR_TO_HDR:
+		return WESTON_TONE_MAP_SDR_TO_HDR;
+	default:
+		return WESTON_TONE_MAP_NONE;
+	}
 }
 
 static inline void
@@ -4161,6 +4209,28 @@ err:
 	return NULL;
 }
 
+static void
+drm_save_color_corrections(struct weston_surface *surf,
+	struct drm_tone_map *target)
+{
+	if (!surf)
+		return;
+
+	struct weston_hdr_metadata *md = surf->hdr_metadata;
+	struct weston_hdr_metadata_static *s = &md->metadata.static_metadata;
+
+	surf->cc.tone_map_mode = to_weston_tone_map_mode(target->tone_map_mode);
+	surf->cc.target_cs = to_weston_colorspace(target->target_cs);
+	surf->cc.target_eotf = to_weston_eotf(target->target_eotf);
+	surf->cc.src_eotf = (surf->hdr_metadata ? s->eotf :
+			to_weston_eotf(DRM_EOTF_SDR_TRADITIONAL));
+	drm_load_weston_md(&surf->cc.target_md, &target->target_md);
+
+	/* initialize csc matrix for renderer */
+	create_unity_matrix(surf->cc.csc);
+	surf->cc.valid = true;
+}
+
 static struct drm_tone_map *
 drm_prepare_hdr_target(struct drm_backend *b,
 			struct weston_surface *ref_hdr_surf,
@@ -4190,6 +4260,7 @@ drm_prepare_hdr_target(struct drm_backend *b,
 		else
 			target->tone_map_mode = VA_TONE_MAPPING_SDR_TO_HDR;
 
+		/* We only only supporting ST2084 EOTF */
 		target_eotf = DRM_EOTF_HDR_ST2084;
 		if (display_hdr_cs & EDID_CS_BT2020RGB)
 			target_cs = DRM_COLORSPACE_REC2020;
@@ -4220,17 +4291,11 @@ drm_prepare_hdr_target(struct drm_backend *b,
 	weston_log("Tone mapping target mode %d colorspace=%d\n",
 		target->tone_map_mode, target->target_cs);
 
-	/* Save these transformation details for renderer, in case if we fail to
-	show view using display engine */
-	surf->cc.tone_map_mode = target->tone_map_mode;
-	surf->cc.target_cs = target->target_cs;
-	surf->cc.target_eotf = target->target_eotf;
-	surf->cc.valid = true;
-	create_unity_matrix(surf->cc.csc);
-	drm_load_weston_md(&surf->cc.target_md, &target->target_md);
+	/* Save these transformation details in weston surface for renderer, in case
+	* if we fail to show view using display engine */
+	drm_save_color_corrections(surf, target);
 	return target;
 }
-
 
 static struct drm_output_state *
 drm_output_propose_hdr_state(struct weston_output *output_base,
