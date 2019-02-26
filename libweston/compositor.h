@@ -1400,6 +1400,13 @@ struct weston_pointer_constraint {
 	struct wl_listener surface_activate_listener;
 };
 
+enum weston_tone_map_mode {
+	WESTON_TONE_MAP_NONE = 0,
+	WESTON_TONE_MAP_HDR_TO_SDR,
+	WESTON_TONE_MAP_SDR_TO_HDR,
+	WESTON_TONE_MAP_HDR_TO_HDR,
+};
+
 struct weston_color_correction {
 	uint8_t deg_size;
 	uint8_t target_eotf;
