@@ -146,7 +146,7 @@ drm_va_create_surface_from_fb(struct drm_va_display *d,
 	uint32_t surf_format;
 
 	/* We support only P010 (Video) or RGB32(subs) currently */
-	if (fb->format->format != DRM_FORMAT_P010) {
+	if (fb->format->format == DRM_FORMAT_P010) {
 		surf_fourcc  = VA_FOURCC('P', '0', '1', '0');
 		surf_format  = VA_RT_FORMAT_YUV420_10;
 	} else {
@@ -195,13 +195,12 @@ drm_va_create_surface_from_fb(struct drm_va_display *d,
 
 static VASurfaceID
 drm_va_create_surface(struct drm_va_display *d,
-				int width, int height)
+				int width, int height, uint32_t surf_format)
 {
     VAStatus va_status;
 	VASurfaceID surface_id;
     VASurfaceAttrib surface_attrib;
 	uint32_t surf_fourcc = VA_FOURCC_RGBA;
-	uint32_t surf_format = VA_RT_FORMAT_RGB32_10;
 
     surface_attrib.type =  VASurfaceAttribPixelFormat;
     surface_attrib.flags = VA_SURFACE_ATTRIB_SETTABLE;
@@ -759,13 +758,19 @@ drm_va_create_display(struct drm_backend *backend)
 		goto error;
 	}
 
-	d->output_surf_id = drm_va_create_surface(d, 3840, 2160);
+	d->output_surf_id = drm_va_create_surface(d,
+			3840,
+			2160,
+			VA_RT_FORMAT_RGB32_10);
 	if (d->output_surf_id == VA_INVALID_ID) {
 		weston_log_continue("VA: Can't create output surface\n");
 		goto error;
 	}
 
-	d->output_subsurf_id = drm_va_create_surface(d, 1000, 200);
+	d->output_subsurf_id = drm_va_create_surface(d,
+			1000,
+			200,
+			VA_RT_FORMAT_RGB32);
 	if (d->output_surf_id == VA_INVALID_ID) {
 		weston_log_continue("VA: Can't create output surface\n");
 		goto error;
