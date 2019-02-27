@@ -132,20 +132,15 @@ drm_print_display_metadata(struct drm_edid_hdr_metadata_static *md)
 /* Prepare target HDR metadata for tone mapping. If the surface has
 * its own metadata, take surface's metadata, else map it to monitor's
 * capabilities */
-int
+void
 drm_prepare_output_hdr_metadata(struct drm_backend *b,
 		struct weston_hdr_metadata *ref_hdr_md,
-		struct weston_hdr_metadata *smd,
 		struct drm_edid_hdr_metadata_static *dmd,
 		struct drm_hdr_metadata_static *out_md)
 {
 	struct weston_hdr_metadata_static *cmd = NULL;
 
-	if (smd)
-		cmd = &smd->metadata.static_metadata;
-	else
-		cmd = &ref_hdr_md->metadata.static_metadata;
-
+	cmd = &ref_hdr_md->metadata.static_metadata;
 	out_md->max_mastering_luminance = cmd->max_luminance;
 	out_md->min_mastering_luminance = cmd->min_luminance;
 
@@ -172,7 +167,6 @@ drm_prepare_output_hdr_metadata(struct drm_backend *b,
 	out_md->metadata_type = 1;
 
 	drm_print_metadata(cmd, dmd, out_md);
-	return 0;
 }
 
 static void

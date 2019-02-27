@@ -364,9 +364,8 @@ uint32_t
 drm_tone_mapping_mode(struct weston_hdr_metadata *content_md,
 		struct drm_edid_hdr_metadata_static *target_md);
 
-int
+void
 drm_prepare_output_hdr_metadata(struct drm_backend *b,
-		struct weston_hdr_metadata *ref_surf_md,
 		struct weston_hdr_metadata *surface_md,
 		struct drm_edid_hdr_metadata_static *display_md,
 		struct drm_hdr_metadata_static *out_md);

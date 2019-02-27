@@ -4209,6 +4209,26 @@ err:
 	return NULL;
 }
 
+static int
+drm_output_setup_hdr_metadata(struct drm_backend *b,
+	struct drm_hdr_metadata_static *target_md,
+	struct drm_head *head)
+{
+	int ret;
+
+	/* Set output HDR metadata */
+	ret = drm_mode_create_property_blob(b, (void *)target_md,
+					sizeof(struct drm_hdr_metadata_static),
+					&head->hdr_md_blob_id);
+	if (ret) {
+		drm_debug(b, "\t\t[view] Set HDR blob failed\n");
+		return -1;
+	}
+
+	drm_debug(b, "\t\t[view] HDR output blob set\n");
+	return 0;
+}
+
 static void
 drm_save_color_corrections(struct weston_surface *surf,
 	struct drm_tone_map *target)
@@ -4224,32 +4244,24 @@ drm_save_color_corrections(struct weston_surface *surf,
 	surf->cc.target_eotf = to_weston_eotf(target->target_eotf);
 	surf->cc.src_eotf = (surf->hdr_metadata ? s->eotf :
 			to_weston_eotf(DRM_EOTF_SDR_TRADITIONAL));
-	drm_load_weston_md(&surf->cc.target_md, &target->target_md);
+	drm_load_weston_md(s, &target->target_md);
 
 	/* initialize csc matrix for renderer */
 	create_unity_matrix(surf->cc.csc);
 	surf->cc.valid = true;
 }
 
-static struct drm_tone_map *
-drm_prepare_hdr_target(struct drm_backend *b,
-			struct weston_surface *ref_hdr_surf,
+static void
+drm_prepare_color_correction_target(struct drm_backend *b,
 			struct weston_surface *surf,
-			struct drm_head *drm_head)
+			struct drm_head *head,
+			struct drm_tone_map *target)
 {
-	int ret;
-	struct drm_tone_map *target;
-	struct drm_edid_hdr_metadata_static *display_md = drm_head->hdr_md;
+	struct drm_edid_hdr_metadata_static *display_md = head->hdr_md;
 	struct weston_hdr_metadata *content_md = surf->hdr_metadata;
 	enum drm_colorspace target_cs = DRM_COLORSPACE_REC709;
 	uint8_t target_eotf = DRM_EOTF_SDR_TRADITIONAL;
-	uint16_t display_hdr_cs = drm_head->clrspaces & EDID_CS_HDR_CS_BASIC;
-
-	target = zalloc(sizeof(*target));
-	if (!target) {
-		weston_log("OOM while creating target\n");
-		return NULL;
-	}
+	uint16_t display_hdr_cs = head->clrspaces & EDID_CS_HDR_CS_BASIC;
 
 	/* We are here means atleast one of the buffer is HDR. Now check
 	* the monitor's capability and decide the tone mapping mode and
@@ -4276,16 +4288,6 @@ drm_prepare_hdr_target(struct drm_backend *b,
 		target_cs = DRM_COLORSPACE_REC709;
 	}
 
-	/* Prepare and setup tone mapping metadata as output metadata */
-	ret = drm_prepare_output_hdr_metadata(b, ref_hdr_surf->hdr_metadata,
-			surf->hdr_metadata,
-			drm_head->hdr_md,
-			&target->target_md);
-	if (ret) {
-		weston_log("Tone mapping not possible\n");
-		return NULL;
-	}
-
 	target->target_eotf = target_eotf;
 	target->target_cs = target_cs;
 	weston_log("Tone mapping target mode %d colorspace=%d\n",
@@ -4294,25 +4296,26 @@ drm_prepare_hdr_target(struct drm_backend *b,
 	/* Save these transformation details in weston surface for renderer, in case
 	* if we fail to show view using display engine */
 	drm_save_color_corrections(surf, target);
-	return target;
 }
 
 static struct drm_output_state *
 drm_output_propose_hdr_state(struct weston_output *output_base,
 			 struct drm_pending_state *pending_state,
-			 struct weston_surface *ref_hdr_surf)
+			 struct weston_surface *ref_hdr_surf,
+			 struct drm_hdr_metadata_static *target_md,
+			 int *num_surf)
 {
 	int ret;
 	struct weston_view *ev;
 	struct drm_output_state *state;
 	struct drm_plane_state *ps = NULL;
-	struct weston_surface *surface = NULL;
 	struct drm_output *output = to_drm_output(output_base);
 	struct drm_backend *b = to_drm_backend(output->base.compositor);
+	struct weston_surface *surface = NULL;
 	struct weston_head *w_head = weston_output_get_first_head(&output->base);
 	struct drm_head *head = to_drm_head(w_head);
-	struct drm_tone_map *tm_target = NULL;
 
+	*num_surf = 0;
 	assert(!output->state_last);
 	state = drm_output_state_duplicate(output->state_cur,
 					   pending_state,
@@ -4320,13 +4323,14 @@ drm_output_propose_hdr_state(struct weston_output *output_base,
 
 	wl_list_for_each(ev, &output_base->compositor->view_list, link) {
 		struct weston_buffer *buffer = NULL;
+		struct drm_tone_map tm_target = {0,};
 
 		surface = ev->surface;
 		if (!surface)
 			continue;
 
 		/* Currently, only DMA buffers are allowed to be sent on display
-		* HW overlays, so ignore any other buffers in the view */
+		* overlays, so ignore any other buffers in the HDR view */
 		buffer = surface->buffer_ref.buffer;
 		if (!buffer || !linux_dmabuf_buffer_get(buffer->resource)) {
 			drm_debug(b, "\t\t[view] Skipping non-dma buffer %p/surface %p\n",
@@ -4334,40 +4338,38 @@ drm_output_propose_hdr_state(struct weston_output *output_base,
 			continue;
 		}
 
-		tm_target = drm_prepare_hdr_target(b, ref_hdr_surf, surface, head);
-		if (!tm_target) {
-			drm_debug(b, "\t\t[view] Failed to create HDR target\n");
-			return NULL;
-		}
+		*num_surf++;
+
+		/* Prepare tone mapping and color management state for this plane */
+		memcpy(&tm_target.target_md, target_md, sizeof(*target_md));
+		drm_prepare_color_correction_target(b, surface, head, &tm_target);
 
 		surface->is_opaque = true;
 		ev->alpha = 1.0f;
 		ps = drm_output_prepare_overlay_view(state, ev,
-				DRM_OUTPUT_PROPOSE_STATE_PLANES_ONLY, tm_target);
+				DRM_OUTPUT_PROPOSE_STATE_PLANES_ONLY, &tm_target);
 		if (!ps) {
 			drm_debug(b, "\t\t[view] failing state generation: "
 					 "atomic test not OK\n");
 			goto err;
 		}
 
-		ret = drm_prepare_plane_colorspace(b, output, ps, tm_target);
+		ret = drm_prepare_plane_colorspace(b, output, ps, &tm_target);
 		if (ret) {
 			drm_debug(b, "\t\t[view] Failed to set plane colorspace\n");
 			goto err;
 		}
 	}
 
-	if (!tm_target) {
-		drm_debug(b, "\t\t[view] No DMA buffer found in HDR view\n");
+	if (!*num_surf) {
+		drm_debug(b, "\t\t[view] No DMA surface in view\n");
 		goto err;
 	}
 
-	/* Set output HDR metadata */
-	ret = drm_mode_create_property_blob(b, (void *)&tm_target->target_md,
-					sizeof(tm_target->target_md),
-					&head->hdr_md_blob_id);
-	if (ret) {
-		drm_debug(b, "\t\t[view] Set HDR blob failed\n");
+	/* Output metadata blob connector property */
+	ret = drm_output_setup_hdr_metadata(b, target_md, head);
+	if (ret != 0) {
+		drm_debug(b, "\t\t[view] failed to set output HDR metadata\n");
 		goto err;
 	}
 
@@ -4375,15 +4377,14 @@ drm_output_propose_hdr_state(struct weston_output *output_base,
 	ret = drm_pending_state_test(state->pending_state);
 	if (ret != 0) {
 		drm_debug(b, "\t\t[view] failing state generation: "
-			     "atomic test not OK\n");
+				 "atomic test not OK\n");
 		goto err;
 	}
 
-	free(tm_target);
+	drm_debug(b, "\t\t[view] Success: propose HDR state\n");
 	return state;
 
 err:
-	free(tm_target);
 	drm_output_state_free(state);
 	return NULL;
 }
@@ -4408,14 +4409,35 @@ drm_handle_hdr_view(struct drm_backend *b,
 	struct drm_plane_state *plane_state;
 	struct drm_output_state *state = NULL;
 	struct drm_plane *target_plane = NULL;
+	struct weston_head *w_head = weston_output_get_first_head(output_base);
+	struct drm_head *head = to_drm_head(w_head);
+	struct drm_hdr_metadata_static target_metadata = {0,};
+	int num_surf = 0;
 	int ret = -1;
 
-	state = drm_output_propose_hdr_state(output_base, pending_state, hdr_surface);
-	if (!state) {
-		drm_debug(b, "\t\t[state] propose hdr state failed\n");
+	if (!head || !hdr_surface) {
+		drm_debug(b, "\t\t[state] Invalid/NULL input to hdr view\n");
 		return ret;
 	}
 
+	/* Prepare output metadata for this HDR view*/
+	drm_prepare_output_hdr_metadata(b,
+			hdr_surface->hdr_metadata,
+			head->hdr_md,
+			&target_metadata);
+
+	/* Try to come up with a display engine /overlay based view */
+	state = drm_output_propose_hdr_state(output_base,
+			pending_state,
+			hdr_surface,
+			&target_metadata,
+			&num_surf);
+	if (!state) {
+		drm_debug(b, "\t\t[state] propose hdr state failed\n");
+		goto prep_metadata;
+	}
+
+	/* Assign views corresponding plane states */
 	wl_list_for_each(ev, &output_base->compositor->view_list, link) {
 		wl_list_for_each(plane_state, &state->plane_list, link) {
 			if (plane_state->ev == ev) {
@@ -4428,17 +4450,26 @@ drm_handle_hdr_view(struct drm_backend *b,
 		if (target_plane) {
 			weston_view_move_to_plane(ev, &target_plane->base);
 			drm_debug(b, "\t\t[state] assign HDR plane success "
-				  "target HDR plane(%d %s)\n", target_plane->plane_id,
+				  "target HDR plane(%d %s)\n",
+				  target_plane->plane_id,
 				  plane_type_enums[target_plane->type].name);
+			num_surf--;
 			ret = 0;
 		}
 	}
 
-	if (ret) {
-		drm_output_state_free(state);
-		state = NULL;
-	}
+	if (!ret && num_surf)
+		weston_log("Warning: Not all the surfaces assigned to planes\n");
+	return 0;
 
+prep_metadata:
+	/* As we are dealing with a HDR view, we need to setup the output
+	* HDR metadata property in drm backend, regardless of we use
+	* display engine overlays, or render engine. So prepare and setup
+	* the property blob */
+	ret = drm_output_setup_hdr_metadata(b, &target_metadata, head);
+	if (ret != 0)
+		weston_log("Failed to set output HDR metadata\n");
 	return ret;
 }
 
