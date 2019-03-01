@@ -133,7 +133,7 @@ drm_print_display_metadata(struct drm_edid_hdr_metadata_static *md)
 * its own metadata, take surface's metadata, else map it to monitor's
 * capabilities */
 void
-drm_prepare_output_hdr_metadata(struct drm_backend *b,
+drm_prepare_output_metadata_display(struct drm_backend *b,
 		struct weston_hdr_metadata *ref_hdr_md,
 		struct drm_edid_hdr_metadata_static *dmd,
 		struct drm_hdr_metadata_static *out_md)
@@ -143,6 +143,10 @@ drm_prepare_output_hdr_metadata(struct drm_backend *b,
 	cmd = &ref_hdr_md->metadata.static_metadata;
 	out_md->max_mastering_luminance = cmd->max_luminance;
 	out_md->min_mastering_luminance = cmd->min_luminance;
+	out_md->max_cll = MIN_NT_ZERO(cmd->max_cll, dmd->desired_max_ll);
+	out_md->max_fall = MIN_NT_ZERO(cmd->max_fall, dmd->desired_max_fall);
+	out_md->eotf = 2;//DRM_EOTF_HDR_ST2084;
+	out_md->metadata_type = 1;
 
 	out_md->primary_r_x = MIN_NT_ZERO(cmd->display_primary_r_x,
 			dmd->display_primary_r_x);
@@ -161,12 +165,33 @@ drm_prepare_output_hdr_metadata(struct drm_backend *b,
 	out_md->white_point_x = MIN_NT_ZERO(cmd->white_point_y,
 			dmd->white_point_y);
 
-	out_md->max_cll = MIN_NT_ZERO(cmd->max_cll, dmd->desired_max_ll);
-	out_md->max_fall = MIN_NT_ZERO(cmd->max_fall, dmd->desired_max_fall);
-	out_md->eotf = EOTF_ET1_GAMMA_HDR_LUM;//EOTF_ET2_SMPTE_2084_LUM;
-	out_md->metadata_type = 1;
-
 	drm_print_metadata(cmd, dmd, out_md);
+}
+
+void
+drm_prepare_output_metadata_content(struct drm_backend *b,
+		struct weston_hdr_metadata *ref_hdr_md,
+		struct drm_hdr_metadata_static *out_md)
+{
+	struct weston_hdr_metadata_static *cmd;
+
+	cmd = &ref_hdr_md->metadata.static_metadata;
+	out_md->max_mastering_luminance = cmd->max_luminance;
+	out_md->min_mastering_luminance = cmd->min_luminance;
+
+	out_md->primary_r_x = cmd->display_primary_r_x;
+	out_md->primary_r_y = cmd->display_primary_r_y;
+	out_md->primary_g_x = cmd->display_primary_g_x;
+	out_md->primary_g_y = cmd->display_primary_g_y;
+	out_md->primary_b_x = cmd->display_primary_b_x;
+	out_md->primary_b_y = cmd->display_primary_b_y;	
+	out_md->white_point_x = cmd->white_point_x;
+	out_md->white_point_x = cmd->white_point_y;
+
+	out_md->max_cll = cmd->max_cll;
+	out_md->max_fall = cmd->max_fall;
+	out_md->eotf = DRM_EOTF_SDR_TRADITIONAL;
+	out_md->metadata_type = 1;
 }
 
 static void

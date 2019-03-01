@@ -324,13 +324,6 @@ struct drm_edid_hdr_metadata_static {
 	uint16_t white_point_y;
 };
 
-struct drm_tone_map {
-	uint8_t tone_map_mode;
-	uint8_t target_eotf;
-	uint8_t target_cs;
-	struct drm_hdr_metadata_static target_md;
-};
-
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
 
 struct drm_format_name {
@@ -350,6 +343,22 @@ enum drm_colorspace {
 	DRM_COLORSPACE_MAX,
 };
 
+struct drm_conn_color_state {
+	bool outputs_is_hdr;
+	bool hdr_state_changed;
+	bool hdr_session_active;
+	uint8_t target_eotf;
+	uint32_t hdr_md_blob_id;
+	enum drm_colorspace output_cs;
+	struct drm_hdr_metadata_static output_md;
+};
+
+struct drm_tone_map {
+	uint8_t tone_map_mode;
+	struct drm_hdr_metadata_static output_md;
+};
+
+
 /* drm-compositor.c */
 const uint8_t *
 edid_find_extended_data_block(const uint8_t *edid,
@@ -365,21 +374,30 @@ drm_tone_mapping_mode(struct weston_hdr_metadata *content_md,
 		struct drm_edid_hdr_metadata_static *target_md);
 
 void
-drm_prepare_output_hdr_metadata(struct drm_backend *b,
-		struct weston_hdr_metadata *surface_md,
-		struct drm_edid_hdr_metadata_static *display_md,
+drm_prepare_output_metadata_display(struct drm_backend *b,
+		struct weston_hdr_metadata *ref_hdr_md,
+		struct drm_edid_hdr_metadata_static *dmd,
+		struct drm_hdr_metadata_static *out_md);
+void
+drm_prepare_output_metadata_content(struct drm_backend *b,
+		struct weston_hdr_metadata *ref_hdr_md,
 		struct drm_hdr_metadata_static *out_md);
 
 struct drm_edid_hdr_metadata_static *
 drm_get_hdr_metadata(const uint8_t *edid, uint32_t edid_len);
+
 uint16_t
 drm_get_display_clrspace(const uint8_t *edid, uint32_t edid_len);
 
 void
 drm_release_hdr_metadata(struct drm_edid_hdr_metadata_static *md);
 
-struct drm_va_display *drm_va_create_display(struct drm_backend *b);
-void drm_va_destroy_display(struct drm_va_display *d);
+struct drm_va_display *
+drm_va_create_display(struct drm_backend *b);
+
+void
+drm_va_destroy_display(struct drm_va_display *d);
+
 struct drm_fb *
 drm_va_tone_map(struct drm_va_display *d,
 		struct drm_fb *fb,

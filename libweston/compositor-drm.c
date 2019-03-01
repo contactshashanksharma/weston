@@ -441,6 +441,15 @@ struct drm_plane_state {
 	int32_t dest_x, dest_y;
 	uint32_t dest_w, dest_h;
 
+	/* Color correction and HDR */
+	uint32_t csc_blob_id;
+	uint32_t degamma_blob_id;
+	uint32_t gamma_blob_id;
+
+	bool csc_changed;
+	bool deg_changed;
+	bool gamma_changed;
+
 	bool complete;
 	struct wl_list link; /* drm_output_state::plane_list */
 };
@@ -474,9 +483,6 @@ struct drm_plane {
 	uint64_t degamma_blob_size;
 	uint64_t gamma_blob_size;
 	uint64_t csc_blob_size;
-	uint32_t csc_blob_id;
-	uint32_t degamma_blob_id;
-	uint32_t gamma_blob_id;
 
 	struct drm_property_info props[WDRM_PLANE__COUNT];
 
@@ -501,7 +507,8 @@ struct drm_head {
 	struct drm_edid edid;
 	struct drm_edid_hdr_metadata_static *hdr_md;
 	uint32_t clrspaces;
-	uint32_t hdr_md_blob_id;
+
+	struct drm_conn_color_state cs;
 
 	/* Holds the properties for the connector */
 	struct drm_property_info props_conn[WDRM_CONNECTOR__COUNT];
@@ -2707,12 +2714,16 @@ drm_output_apply_state_atomic(struct drm_output_state *state,
 		/* No need for the DPMS property, since it is implicit in
 		 * routing and CRTC activity. */
 		wl_list_for_each(head, &output->base.head_list, base.output_link) {
+			struct drm_conn_color_state *hdr_state = &head->cs;
+
 			ret |= connector_add_prop(req, head, WDRM_CONNECTOR_CRTC_ID,
 						  output->crtc_id);
-			if (head->hdr_md_blob_id) {
+			//if (hdr_state->hdr_state_changed) {
+				weston_log("Shashank: Added HDR blob in state req\n");
 				ret |= connector_add_prop(req, head, WDRM_CONNECTOR_HDR_METADATA,
-					head->hdr_md_blob_id);
-			}
+					hdr_state->hdr_md_blob_id);
+				hdr_state->hdr_state_changed = false;
+			//}
 		}
 	} else {
 		ret |= crtc_add_prop(req, output, WDRM_CRTC_MODE_ID, 0);
@@ -3374,11 +3385,13 @@ drm_setup_plane_csc(struct drm_backend *b,
 
 	generate_csc_lut(b, csc_lut, content_cs, target_cs);
 	ret = drm_mode_create_property_blob(b, (uint8_t *)csc_lut,
-			sizeof(csc_lut), &plane->csc_blob_id);
+			sizeof(csc_lut), &ps->csc_blob_id);
 	if (ret) {
 		weston_log("Failed to create plane CSC prop blob\n");
-		plane->csc_blob_id = -1;
+		ps->csc_blob_id = -1;
 	}
+
+	ps->csc_changed = true;
 
 	/* Save CSC correction data for renderer in case overlay view fails */
 	memcpy(surf->cc.csc, csc_lut, 9 * sizeof(double));
@@ -3405,12 +3418,13 @@ drm_setup_plane_degamma(struct drm_backend *b,
 
 	ret = drm_mode_create_property_blob(b, (uint8_t *)deg_lut,
 						deg_lut_size * sizeof(struct drm_color_lut),
-						&plane->degamma_blob_id);
+						&ps->degamma_blob_id);
 	if (ret) {
 		weston_log("Failed to create plane degamma prop blob\n");
-		plane->degamma_blob_id = -1;
+		ps->degamma_blob_id = -1;
 	}
 
+	ps->deg_changed = true;
 	return ret;
 }
 
@@ -3439,12 +3453,12 @@ drm_output_setup_gamma(struct drm_backend *b,
 static struct drm_fb *
 drm_do_tone_mapping(struct drm_output *output,
 		struct drm_backend *b,
-		struct weston_view *ev,
+		struct weston_surface *surface,
 		struct drm_fb *fb,
 		struct drm_tone_map *tm)
 {
 	struct drm_fb *tm_fb;
-	struct weston_hdr_metadata *surf_md = ev->surface->hdr_metadata;
+	struct weston_hdr_metadata *surf_md = surface->hdr_metadata;
 
 	/* Tone map the buffer as per output hdr metadata */
 	tm_fb = drm_va_tone_map(output->va_display, fb, surf_md, tm);
@@ -3522,6 +3536,29 @@ drm_load_weston_md(struct weston_hdr_metadata_static *wmd,
 	wmd->min_luminance = dmd->min_mastering_luminance;
 }
 
+static void
+drm_save_color_corrections(struct weston_surface *surf,
+	struct drm_conn_color_state *hdr_state,
+	uint8_t tone_map_mode)
+{
+	if (!surf)
+		return;
+
+	struct weston_hdr_metadata *md = surf->hdr_metadata;
+	struct weston_hdr_metadata_static *s = &md->metadata.static_metadata;
+
+	surf->cc.tone_map_mode = to_weston_tone_map_mode(tone_map_mode);
+	surf->cc.target_cs = to_weston_colorspace(hdr_state->output_cs);
+	surf->cc.target_eotf = to_weston_eotf(hdr_state->target_eotf);
+	surf->cc.src_eotf = (surf->hdr_metadata ? s->eotf :
+			to_weston_eotf(DRM_EOTF_SDR_TRADITIONAL));
+	drm_load_weston_md(s, &hdr_state->output_md);
+
+	/* initialize csc matrix for renderer */
+	create_unity_matrix(surf->cc.csc);
+	surf->cc.valid = true;
+}
+
 /*
 * We are going to blend multiple planes, but there is a possibility that
 * one or more of the surfaces are in BT2020 colorspace (Like a HDR
@@ -3536,11 +3573,11 @@ drm_load_weston_md(struct weston_hdr_metadata_static *wmd,
 static int
 drm_prepare_plane_for_blending(struct drm_backend *b,
 			struct drm_plane_state *ps,
-			struct drm_tone_map *tm)
+			struct drm_conn_color_state *hdr_state)
 {
 	int ret;
 	struct drm_plane *plane = ps->plane;
-	enum drm_colorspace target = tm->target_cs;
+	enum drm_colorspace target = hdr_state->output_cs;
 
 	if (!plane)
 		return 0;
@@ -3566,13 +3603,18 @@ drm_prepare_plane_for_blending(struct drm_backend *b,
 
 static int
 drm_prepare_plane_colorspace(struct drm_backend *b,
-	struct drm_output *output,
 	struct drm_plane_state *ps,
-	struct drm_tone_map *tm)
+	struct drm_conn_color_state *hdr_state,
+	uint8_t tone_map_mode)
 {
 	int ret;
 	struct drm_plane *p = ps->plane;
 	struct weston_surface *surf;
+
+	/* There is no need to apply plane color corrections again, if this is a
+	* active HDR session */
+	if (hdr_state->hdr_session_active)
+		return 0;
 
 	if (!p || p->type == WDRM_PLANE_TYPE_CURSOR)
 		return 0;
@@ -3585,14 +3627,15 @@ drm_prepare_plane_colorspace(struct drm_backend *b,
 		surf->colorspace >= DRM_COLORSPACE_MAX)
 		surf->colorspace = DRM_COLORSPACE_REC709;
 
-	if (surf->colorspace != tm->target_cs) {
-		ret = drm_prepare_plane_for_blending(b, ps, tm);
+	if (surf->colorspace != hdr_state->output_cs) {
+		ret = drm_prepare_plane_for_blending(b, ps, hdr_state);
 		if (ret) {
 			drm_debug(b, "\t\t[state] Failed to prepare plane for CSC\n");
 			return ret;
 		}
 	}
 
+	drm_save_color_corrections(surf, hdr_state, tone_map_mode);
 	drm_debug(b, "\t\t[state] Plane colorspace prepared\n");
 	return 0;
 }
@@ -3687,8 +3730,8 @@ drm_output_prepare_overlay_view(struct drm_output_state *output_state,
 			continue;
 		}
 
-		if (tm) {
-			tm_fb = drm_do_tone_mapping(output, b, ev, fb, tm);
+		if (tm && tm->tone_map_mode) {
+			tm_fb = drm_do_tone_mapping(output, b, ev->surface, fb, tm);
 			if (!tm_fb) {
 				drm_debug(b, "\t\t\t\t[overlay] Tone mapping failed\n");
 				return NULL;
@@ -4215,97 +4258,57 @@ drm_output_setup_hdr_metadata(struct drm_backend *b,
 	struct drm_head *head)
 {
 	int ret;
+	struct drm_conn_color_state *hdr_state = &head->cs;
+
+	/* HDR metadata change is not required during an active HDR session */
+	if (hdr_state->hdr_session_active && hdr_state->hdr_md_blob_id)
+		return 0;
 
 	/* Set output HDR metadata */
 	ret = drm_mode_create_property_blob(b, (void *)target_md,
 					sizeof(struct drm_hdr_metadata_static),
-					&head->hdr_md_blob_id);
+					&hdr_state->hdr_md_blob_id);
 	if (ret) {
 		drm_debug(b, "\t\t[view] Set HDR blob failed\n");
 		return -1;
 	}
 
+	weston_log("Shashank: Output metadata blob prepared, id=%d\n",
+		hdr_state->hdr_md_blob_id);
+	hdr_state->hdr_state_changed = true;
 	drm_debug(b, "\t\t[view] HDR output blob set\n");
 	return 0;
 }
 
 static void
-drm_save_color_corrections(struct weston_surface *surf,
-	struct drm_tone_map *target)
+drm_prepare_for_tone_mapping(struct weston_surface *surface,
+	struct drm_conn_color_state *hdr_state,
+	struct drm_tone_map *tm)
 {
-	if (!surf)
-		return;
-
-	struct weston_hdr_metadata *md = surf->hdr_metadata;
-	struct weston_hdr_metadata_static *s = &md->metadata.static_metadata;
-
-	surf->cc.tone_map_mode = to_weston_tone_map_mode(target->tone_map_mode);
-	surf->cc.target_cs = to_weston_colorspace(target->target_cs);
-	surf->cc.target_eotf = to_weston_eotf(target->target_eotf);
-	surf->cc.src_eotf = (surf->hdr_metadata ? s->eotf :
-			to_weston_eotf(DRM_EOTF_SDR_TRADITIONAL));
-	drm_load_weston_md(s, &target->target_md);
-
-	/* initialize csc matrix for renderer */
-	create_unity_matrix(surf->cc.csc);
-	surf->cc.valid = true;
-}
-
-static void
-drm_prepare_color_correction_target(struct drm_backend *b,
-			struct weston_surface *surf,
-			struct drm_head *head,
-			struct drm_tone_map *target)
-{
-	struct drm_edid_hdr_metadata_static *display_md = head->hdr_md;
-	struct weston_hdr_metadata *content_md = surf->hdr_metadata;
-	enum drm_colorspace target_cs = DRM_COLORSPACE_REC709;
-	uint8_t target_eotf = DRM_EOTF_SDR_TRADITIONAL;
-	uint16_t display_hdr_cs = head->clrspaces & EDID_CS_HDR_CS_BASIC;
-
-	/* We are here means atleast one of the buffer is HDR. Now check
-	* the monitor's capability and decide the tone mapping mode and
-	* output colorspace */
-	if (display_md) {
-		if (content_md)
-			target->tone_map_mode = VA_TONE_MAPPING_HDR_TO_HDR;
+	if (surface->hdr_metadata) {
+		if (hdr_state->outputs_is_hdr)
+			tm->tone_map_mode = VA_TONE_MAPPING_HDR_TO_HDR;
 		else
-			target->tone_map_mode = VA_TONE_MAPPING_SDR_TO_HDR;
-
-		/* We only only supporting ST2084 EOTF */
-		target_eotf = DRM_EOTF_HDR_ST2084;
-		if (display_hdr_cs & EDID_CS_BT2020RGB)
-			target_cs = DRM_COLORSPACE_REC2020;
-		else if (display_hdr_cs & EDID_CS_DCIP3)
-			target_cs = DRM_COLORSPACE_DCIP3;
-		else
-			weston_log("Warning: HDR monitor without wide gamut support ?\n");
+			tm->tone_map_mode = VA_TONE_MAPPING_HDR_TO_SDR;
 	} else {
-
-		if (content_md)
-			target->tone_map_mode = VA_TONE_MAPPING_HDR_TO_SDR;
-		target_eotf = DRM_EOTF_SDR_TRADITIONAL;
-		target_cs = DRM_COLORSPACE_REC709;
+		if (hdr_state->outputs_is_hdr)
+			tm->tone_map_mode = VA_TONE_MAPPING_HDR_TO_SDR;
+		else
+			tm->tone_map_mode = 0;
 	}
 
-	target->target_eotf = target_eotf;
-	target->target_cs = target_cs;
-	weston_log("Tone mapping target mode %d colorspace=%d\n",
-		target->tone_map_mode, target->target_cs);
-
-	/* Save these transformation details in weston surface for renderer, in case
-	* if we fail to show view using display engine */
-	drm_save_color_corrections(surf, target);
+	/* Prepare data for tone mapping */
+	memcpy(&tm->output_md, &hdr_state->output_md, sizeof(tm->output_md));
 }
 
 static struct drm_output_state *
 drm_output_propose_hdr_state(struct weston_output *output_base,
 			 struct drm_pending_state *pending_state,
 			 struct weston_surface *ref_hdr_surf,
-			 struct drm_hdr_metadata_static *target_md,
-			 int *num_surf)
+			 struct drm_conn_color_state *hdr_state)
 {
 	int ret;
+	int num_surf = 0;
 	struct weston_view *ev;
 	struct drm_output_state *state;
 	struct drm_plane_state *ps = NULL;
@@ -4315,7 +4318,6 @@ drm_output_propose_hdr_state(struct weston_output *output_base,
 	struct weston_head *w_head = weston_output_get_first_head(&output->base);
 	struct drm_head *head = to_drm_head(w_head);
 
-	*num_surf = 0;
 	assert(!output->state_last);
 	state = drm_output_state_duplicate(output->state_cur,
 					   pending_state,
@@ -4323,13 +4325,12 @@ drm_output_propose_hdr_state(struct weston_output *output_base,
 
 	wl_list_for_each(ev, &output_base->compositor->view_list, link) {
 		struct weston_buffer *buffer = NULL;
-		struct drm_tone_map tm_target = {0,};
-
+		struct drm_tone_map tm = {0,};
 		surface = ev->surface;
 		if (!surface)
 			continue;
 
-		/* Currently, only DMA buffers are allowed to be sent on display
+		/* Only DMA buffers are allowed to be sent on display
 		* overlays, so ignore any other buffers in the HDR view */
 		buffer = surface->buffer_ref.buffer;
 		if (!buffer || !linux_dmabuf_buffer_get(buffer->resource)) {
@@ -4338,36 +4339,37 @@ drm_output_propose_hdr_state(struct weston_output *output_base,
 			continue;
 		}
 
-		*num_surf++;
-
-		/* Prepare tone mapping and color management state for this plane */
-		memcpy(&tm_target.target_md, target_md, sizeof(*target_md));
-		drm_prepare_color_correction_target(b, surface, head, &tm_target);
+		drm_prepare_for_tone_mapping(surface, hdr_state, &tm);
 
 		surface->is_opaque = true;
 		ev->alpha = 1.0f;
+		num_surf++;
 		ps = drm_output_prepare_overlay_view(state, ev,
-				DRM_OUTPUT_PROPOSE_STATE_PLANES_ONLY, &tm_target);
+				DRM_OUTPUT_PROPOSE_STATE_PLANES_ONLY, &tm);
 		if (!ps) {
 			drm_debug(b, "\t\t[view] failing state generation: "
 					 "atomic test not OK\n");
+			weston_log("Shashank: prep overlay view failed\n");
 			goto err;
 		}
 
-		ret = drm_prepare_plane_colorspace(b, output, ps, &tm_target);
+		ret = drm_prepare_plane_colorspace(b, ps, hdr_state, tm.tone_map_mode);
 		if (ret) {
 			drm_debug(b, "\t\t[view] Failed to set plane colorspace\n");
+			weston_log("Shashank: prep plane cs failed\n");
 			goto err;
 		}
 	}
 
-	if (!*num_surf) {
+	if (!num_surf) {
 		drm_debug(b, "\t\t[view] No DMA surface in view\n");
+		weston_log("Shashank: No DMA surf\n");
 		goto err;
 	}
 
-	/* Output metadata blob connector property */
-	ret = drm_output_setup_hdr_metadata(b, target_md, head);
+	/* Apply output HDR metadata */
+	weston_log("Shashank: setting HDR blob\n");
+	ret = drm_output_setup_hdr_metadata(b, &hdr_state->output_md, head);
 	if (ret != 0) {
 		drm_debug(b, "\t\t[view] failed to set output HDR metadata\n");
 		goto err;
@@ -4378,6 +4380,7 @@ drm_output_propose_hdr_state(struct weston_output *output_base,
 	if (ret != 0) {
 		drm_debug(b, "\t\t[view] failing state generation: "
 				 "atomic test not OK\n");
+		weston_log("Shashank: atomic test failed\n");
 		goto err;
 	}
 
@@ -4385,6 +4388,7 @@ drm_output_propose_hdr_state(struct weston_output *output_base,
 	return state;
 
 err:
+	weston_log("Shashank: propose HDR state failed\n");
 	drm_output_state_free(state);
 	return NULL;
 }
@@ -4399,6 +4403,137 @@ drm_propose_state_mode_to_string(enum drm_output_propose_state_mode mode)
 	return drm_output_propose_state_mode_as_string[mode];
 }
 
+static void
+drm_reset_hdr_plane_state(struct drm_backend *b,
+	struct drm_plane_state *ps)
+{
+	if (ps->csc_blob_id) {
+		drmModeDestroyPropertyBlob(b->drm.fd, ps->csc_blob_id);
+		ps->csc_blob_id = 0;
+		ps->csc_changed = true;
+	}
+
+	if (ps->degamma_blob_id) {
+		drmModeDestroyPropertyBlob(b->drm.fd, ps->degamma_blob_id);
+		ps->degamma_blob_id = 0;
+		ps->deg_changed = true;
+	}
+}
+
+/* Stop and cleanup HDR session by changing to SDR specs */
+static void
+drm_reset_hdr_state(struct drm_backend *b,
+	struct drm_head *head)
+{
+	struct drm_conn_color_state *hdr_state = &head->cs;
+
+	/* No need to setup, if this is not an active session */
+	if (!hdr_state->hdr_session_active)
+		return;
+
+	hdr_state->outputs_is_hdr = false;
+	hdr_state->output_cs = DRM_COLORSPACE_REC709;
+	hdr_state->target_eotf = DRM_EOTF_SDR_TRADITIONAL;
+	hdr_state->hdr_session_active = false;
+
+	if (hdr_state->hdr_md_blob_id) {
+		drmModeDestroyPropertyBlob(b->drm.fd, hdr_state->hdr_md_blob_id);
+		hdr_state->hdr_md_blob_id = 0;
+	}
+
+	/* In order to remove the HDR metadata from infoframes, kenrel
+	* just needs the output eotf value as SDR, and it ignores rest of
+	* the data, lets exploit this */
+	memset(&hdr_state->output_md, 0, sizeof(hdr_state->output_md));
+	hdr_state->output_md.eotf = DRM_EOTF_SDR_TRADITIONAL;
+}
+
+static void
+drm_hdr_state_set(struct drm_backend *b,
+	struct weston_surface *hdr_surface,
+	struct drm_head *head)
+{
+	struct drm_edid_hdr_metadata_static *display_md = head->hdr_md;
+	struct weston_hdr_metadata *surf_md = hdr_surface->hdr_metadata;
+	struct drm_conn_color_state *hdr_state = &head->cs;
+	uint16_t display_hdr_cs = 0;
+
+	/* No need to analyze again, as this is an active session */
+	if (hdr_state->hdr_session_active)
+		return;
+
+	/* We are here means we have one HDR surface, now check the monitor */
+	if (head->hdr_md) {
+		hdr_state->outputs_is_hdr = true;
+
+		/* Analyze and prepare output colorspace */
+		display_hdr_cs = head->clrspaces & EDID_CS_HDR_CS_BASIC;
+		if (display_hdr_cs & EDID_CS_BT2020RGB ||
+				display_hdr_cs & EDID_CS_BT2020CYCC)
+			hdr_state->output_cs = DRM_COLORSPACE_REC2020;
+		else if (display_hdr_cs & EDID_CS_DCIP3)
+			hdr_state->output_cs = DRM_COLORSPACE_DCIP3;
+		else
+			hdr_state->output_cs = DRM_COLORSPACE_REC709;
+
+		/* We only support PQ ST2084 EOTF output now */
+		hdr_state->target_eotf = DRM_EOTF_HDR_ST2084;
+		drm_prepare_output_metadata_display(b,
+			surf_md,
+			display_md,
+			&hdr_state->output_md);
+	} else {
+		hdr_state->outputs_is_hdr = false;
+		hdr_state->output_cs = DRM_COLORSPACE_REC709;
+		hdr_state->target_eotf = DRM_EOTF_SDR_TRADITIONAL;
+		drm_prepare_output_metadata_content(b, surf_md, &hdr_state->output_md);
+	}
+}
+
+static int
+drm_reset_hdr_view(struct drm_backend *b,
+		struct weston_output *output_base,
+		struct drm_pending_state *pending_state)
+{
+	int ret;
+	struct drm_output *output = to_drm_output(output_base);
+	struct weston_head *w_head = weston_output_get_first_head(output_base);
+	struct drm_head *head = to_drm_head(w_head);
+	struct drm_conn_color_state *hdr_state = &head->cs;
+	struct drm_output_state *output_state;
+	struct drm_plane_state *ps;
+	struct drm_plane *p;
+
+	drm_reset_hdr_state(b, head);
+
+	/* Clean output HDR metadata */
+	ret = drm_output_setup_hdr_metadata(b, &hdr_state->output_md, head);
+	if (ret != 0) {
+		drm_debug(b, "\t\t[view] failed to set output HDR metadata\n");
+		return ret;
+	}
+
+	output_state = drm_output_state_duplicate(output->state_cur,
+			pending_state,
+			DRM_OUTPUT_STATE_CLEAR_PLANES);
+
+	wl_list_for_each(p, &b->plane_list, link) {
+		if (p->type != WDRM_PLANE_TYPE_OVERLAY)
+			continue;
+
+		/* Cleanup any existing color corrections */
+		ps = drm_output_state_get_existing_plane(output_state, p);
+		if (!ps)
+			continue;
+
+		if (ps->csc_blob_id || ps->degamma_blob_id)
+			drm_reset_hdr_plane_state(b, ps);
+	}
+
+	drm_output_state_free(output_state);
+	return 0;
+}
+
 static int
 drm_handle_hdr_view(struct drm_backend *b,
 		struct weston_output *output_base,
@@ -4411,8 +4546,7 @@ drm_handle_hdr_view(struct drm_backend *b,
 	struct drm_plane *target_plane = NULL;
 	struct weston_head *w_head = weston_output_get_first_head(output_base);
 	struct drm_head *head = to_drm_head(w_head);
-	struct drm_hdr_metadata_static target_metadata = {0,};
-	int num_surf = 0;
+	struct drm_conn_color_state *hdr_state;
 	int ret = -1;
 
 	if (!head || !hdr_surface) {
@@ -4420,24 +4554,20 @@ drm_handle_hdr_view(struct drm_backend *b,
 		return ret;
 	}
 
-	/* Prepare output metadata for this HDR view*/
-	drm_prepare_output_hdr_metadata(b,
-			hdr_surface->hdr_metadata,
-			head->hdr_md,
-			&target_metadata);
+	drm_hdr_state_set(b, hdr_surface, head);
+	hdr_state = &head->cs;
 
 	/* Try to come up with a display engine /overlay based view */
 	state = drm_output_propose_hdr_state(output_base,
 			pending_state,
 			hdr_surface,
-			&target_metadata,
-			&num_surf);
+			hdr_state);
 	if (!state) {
 		drm_debug(b, "\t\t[state] propose hdr state failed\n");
 		goto prep_metadata;
 	}
 
-	/* Assign views corresponding plane states */
+	/* Assign views to corresponding plane states */
 	wl_list_for_each(ev, &output_base->compositor->view_list, link) {
 		wl_list_for_each(plane_state, &state->plane_list, link) {
 			if (plane_state->ev == ev) {
@@ -4453,13 +4583,18 @@ drm_handle_hdr_view(struct drm_backend *b,
 				  "target HDR plane(%d %s)\n",
 				  target_plane->plane_id,
 				  plane_type_enums[target_plane->type].name);
-			num_surf--;
 			ret = 0;
 		}
 	}
 
-	if (!ret && num_surf)
+	if (!ret)
 		weston_log("Warning: Not all the surfaces assigned to planes\n");
+
+	if (!hdr_state->hdr_state_changed) {
+		weston_log("Shashank: Starting HDR session\n");
+		hdr_state->hdr_session_active = true;
+	}
+
 	return 0;
 
 prep_metadata:
@@ -4467,10 +4602,41 @@ prep_metadata:
 	* HDR metadata property in drm backend, regardless of we use
 	* display engine overlays, or render engine. So prepare and setup
 	* the property blob */
-	ret = drm_output_setup_hdr_metadata(b, &target_metadata, head);
+	ret = drm_output_setup_hdr_metadata(b, &hdr_state->output_md, head);
 	if (ret != 0)
 		weston_log("Failed to set output HDR metadata\n");
+
 	return ret;
+}
+
+static inline bool
+drm_view_was_hdr(struct weston_output *output_base)
+{
+	struct weston_head *w_head = weston_output_get_first_head(output_base);
+	struct drm_head *head = to_drm_head(w_head);
+
+	if (!head)
+		return false;
+	if (head->cs.hdr_session_active)
+		return true;
+	return false;
+}
+
+static inline struct weston_surface *
+drm_view_is_hdr(struct weston_output *output_base)
+{
+	struct weston_view *ev;
+
+	wl_list_for_each(ev, &output_base->compositor->view_list, link) {
+		struct weston_surface *hdr_surface;
+
+		hdr_surface = ev->surface;
+		if (!hdr_surface || !hdr_surface->hdr_metadata)
+			continue;
+		return hdr_surface;
+	}
+
+	return NULL;
 }
 
 static void
@@ -4484,31 +4650,45 @@ drm_assign_planes(struct weston_output *output_base, void *repaint_data)
 	struct weston_view *ev;
 	struct weston_plane *primary = &output_base->compositor->primary_plane;
 	enum drm_output_propose_state_mode mode = DRM_OUTPUT_PROPOSE_STATE_PLANES_ONLY;
+	struct weston_surface *hdr_surface;
 
 	drm_debug(b, "\t[repaint] preparing state for output %s (%lu)\n",
 		  output_base->name, (unsigned long) output_base->id);
 
-	/* If any of the buffers is HDR, we need to handle all the buffers in the 
-	* view to match HDR output. Right now we are taking the first HDR buffer
-	* in the view as reference */
-	wl_list_for_each(ev, &output_base->compositor->view_list, link) {
-		int ret;
-		struct weston_surface *hdr_surface;
+	/* Does this view contain a HDR surface ? */
+	hdr_surface = drm_view_is_hdr(output_base);
+	if (hdr_surface) {
+		weston_log("============= Handle start ================\n");
 
-		hdr_surface = ev->surface;
-		if (!hdr_surface || !hdr_surface->hdr_metadata)
-			continue;
-
-		ret = drm_handle_hdr_view(b, output_base, hdr_surface, pending_state);
-		if (ret) {
-			drm_debug(b, "\t[rapaint] Handling HDR view failed\n");
-			goto try_render_view;
+		/*  HDR view. We need to:
+		* - check the display capabilities
+		* - if display is HDR, tone map and color correct all non-HDR surfaces
+		* - if display is non-hdr, tone map HDR surface
+		* - assign these surfaces to overlays of display engine */
+		if (drm_handle_hdr_view(b,
+				output_base,
+				hdr_surface,
+				pending_state)) {
+			drm_debug(b, "\t[rapaint] Handling HDR view (overlay) failed\n");
+			goto render_view;
 		}
 
+		weston_log("============= Handle HDR view succcess ================\n");
 		drm_debug(b, "\t[rapaint] HDR view successfully handled\n");
 		return;
+	} else {
+		/* Is this end of a pre-established HDR session ? */
+		if (!drm_view_was_hdr(output_base))
+			goto normal_operation;
+
+		/* This is the end of HDR session, so we need to:
+		* - reset HDR metadata to match SDR view.
+		* - reset color correction applied to target SDR*/
+		if (drm_reset_hdr_view(b, output_base, pending_state))
+			weston_log("Warning: Failed to clean previous HDR view residues\n");
 	}
 
+normal_operation:
 	if (!b->sprites_are_broken && !output->virtual) {
 		drm_debug(b, "\t[repaint] trying planes-only build state\n");
 		state = drm_output_propose_state(output_base, pending_state, mode);
@@ -4528,7 +4708,7 @@ drm_assign_planes(struct weston_output *output_base, void *repaint_data)
 		drm_debug(b, "\t[state] no overlay plane support\n");
 	}
 
-try_render_view:
+render_view:
 	if (!state) {
 		mode = DRM_OUTPUT_PROPOSE_STATE_RENDERER_ONLY;
 		state = drm_output_propose_state(output_base, pending_state,
@@ -7289,8 +7469,11 @@ drm_head_destroy(struct drm_head *head)
 {
 	if (head->hdr_md)
 		drm_release_hdr_metadata(head->hdr_md);
-	if (head->hdr_md_blob_id)
-		drmModeDestroyPropertyBlob(head->backend->drm.fd, head->hdr_md_blob_id);
+
+	if (head->cs.hdr_md_blob_id) {
+		drmModeDestroyPropertyBlob(head->backend->drm.fd,
+			head->cs.hdr_md_blob_id);
+	}
 
 	weston_head_release(&head->base);
 	drm_property_info_free(head->props_conn, WDRM_CONNECTOR__COUNT);

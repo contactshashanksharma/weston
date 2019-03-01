@@ -246,7 +246,7 @@ drm_va_set_output_tm_metadata(struct weston_hdr_metadata *content_md,
 				VAHdrMetaDataHDR10 *o_hdr10_md,
 				VAHdrMetaData *out_metadata)
 {
-	const struct drm_hdr_metadata_static *t_smd = &tm->target_md;
+	const struct drm_hdr_metadata_static *t_smd = &tm->output_md;
 
 	/* SDR target display */
 	if (tm->tone_map_mode == VA_TONE_MAPPING_HDR_TO_SDR) {
