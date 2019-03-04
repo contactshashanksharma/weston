@@ -269,7 +269,7 @@ drm_va_set_output_tm_metadata(struct weston_hdr_metadata *content_md,
 	const struct drm_hdr_metadata_static *t_smd = &tm->target_md;
 
 	/* SDR target display */
-	if (tm->tone_map_mode == VA_TONE_MAPPING_HDR_TO_SDR) {
+	if (tm->tm_mode == VA_TONE_MAPPING_HDR_TO_SDR) {
 
 		/* Hard coding values to standard SDR libva values */
 		o_hdr10_md->display_primaries_x[0] = 15000;
@@ -442,31 +442,6 @@ drm_va_create_hdr_filter(struct drm_va_display *d,
 	return drm_va_create_input_tm_filter(d, c_md, tm_type);
 }
 
-uint32_t
-drm_tone_mapping_mode(struct weston_hdr_metadata *content_md,
-		struct drm_edid_hdr_metadata_static *target_md)
-{
-	uint32_t tm_type;
-
-	/* HDR content and HDR display */
-	if (content_md && target_md)
-		tm_type = VA_TONE_MAPPING_HDR_TO_HDR;
-
-	/* HDR content and SDR display */
-	if (content_md && !target_md)
-		tm_type = VA_TONE_MAPPING_HDR_TO_SDR;
-
-	/* SDR content and HDR display */
-	if (!content_md && target_md)
-		tm_type = VA_TONE_MAPPING_SDR_TO_HDR;
-
-	/* SDR content and SDR display */
-	if (!content_md && !target_md)
-		return 0;
-
-	return tm_type;
-}
-
 static VAStatus
 drm_va_process_buffer(struct drm_va_display *d,
 	const VARectangle *surface_region,
@@ -573,7 +548,7 @@ drm_va_tone_map(struct drm_va_display *d,
 	}
 
 	/* Setup input tonemapping buffer filter */
-	va_status  = drm_va_create_hdr_filter(d, content_md, tm->tone_map_mode);
+	va_status  = drm_va_create_hdr_filter(d, content_md, tm->tm_mode);
 	if (va_status != VA_STATUS_SUCCESS) {
 		weston_log("VA: Can't create HDR filter, tone map failed\n");
 		ret = -1;

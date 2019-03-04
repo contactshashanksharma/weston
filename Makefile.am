@@ -398,7 +398,8 @@ drm_backend_la_CFLAGS =				\
 drm_backend_la_SOURCES =			\
 	libweston/compositor-drm.c		\
 	libweston/drm-va-hdr.c			\
-	libweston/drm-hdr-metadata.c			\
+	libweston/drm-hdr-metadata.c		\
+	libweston/drm-color-transformation.c	\
 	libweston/compositor-drm.h		\
 	$(INPUT_BACKEND_SOURCES)		\
 	shared/helpers.h			\

@@ -44,6 +44,13 @@ enum hdr_metadata_eotf {
 	EOTF_HLG,
 };
 
+enum hdr_tone_map_mode {
+	WESTON_TONE_MAP_NONE,
+	WESTON_TONE_MAP_HDR_TO_HDR,
+	WESTON_TONE_MAP_HDR_TO_SDR,
+	WESTON_TONE_MAP_SDR_TO_HDR
+};
+
 struct weston_hdr_metadata_dynamic {
 	uint8_t size;
 	uint8_t *metadata;

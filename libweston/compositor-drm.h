@@ -306,13 +306,7 @@ struct drm_hdr_metadata_static {
 	uint16_t max_cll;
 };
 
-/* Monitor's HDR metadata */
-struct drm_edid_hdr_metadata_static {
-	uint8_t eotf;
-	uint8_t metadata_type;
-	uint8_t desired_max_ll;
-	uint8_t desired_max_fall;
-	uint8_t desired_min_ll;
+struct drm_display_color_primaries {
 	uint16_t display_primary_r_x;
 	uint16_t display_primary_r_y;
 	uint16_t display_primary_g_x;
@@ -323,11 +317,54 @@ struct drm_edid_hdr_metadata_static {
 	uint16_t white_point_y;
 };
 
+/* Monitor's HDR metadata */
+struct drm_edid_hdr_metadata_static {
+	uint8_t eotf;
+	uint8_t metadata_type;
+	uint8_t desired_max_ll;
+	uint8_t desired_max_fall;
+	uint8_t desired_min_ll;
+};
+
+/* Match libva values 1:1 */
+enum drm_tone_map_mode {
+	DRM_TONE_MAPPING_MODE_NONE = 0,
+	DRM_TONE_MAPPING_HDR_TO_HDR = 1,
+	DRM_TONE_MAPPING_HDR_TO_SDR = 2,
+	DRM_TONE_MAPPING_SDR_TO_HDR = 8,
+};
+
 struct drm_tone_map {
-	uint8_t tone_map_mode;
-	uint8_t target_eotf;
-	uint8_t target_cs;
+	enum drm_tone_map_mode tm_mode;
 	struct drm_hdr_metadata_static target_md;
+};
+
+struct drm_plane_color_state {
+	uint32_t csc_blob_id;
+	uint32_t deg_blob_id;
+	uint32_t gamma_blob_id;
+
+	struct drm_tone_map tm;
+	bool changed;
+};
+
+enum drm_colorspace {
+	DRM_COLORSPACE_INVALID,
+	DRM_COLORSPACE_REC709,
+	DRM_COLORSPACE_DCIP3,
+	DRM_COLORSPACE_REC2020,
+	DRM_COLORSPACE_MAX,
+};
+
+struct drm_conn_color_state {
+	bool output_is_hdr;
+	uint8_t o_cs;
+	uint8_t o_eotf;
+	struct drm_hdr_metadata_static o_md;
+	bool changed;
+
+	uint32_t o_hdr_blob_id;
+	uint32_t o_gamma_blob_id;
 };
 
 #define weston_log_hdr(fmt, ...) \
@@ -435,14 +472,6 @@ static const char *drm_print_format_name(uint32_t format)
 	return NULL;
 }
 
-enum drm_colorspace {
-	DRM_COLORSPACE_INVALID,
-	DRM_COLORSPACE_REC709,
-	DRM_COLORSPACE_DCIP3,
-	DRM_COLORSPACE_REC2020,
-	DRM_COLORSPACE_MAX,
-};
-
 /* drm-compositor.c */
 const uint8_t *
 edid_find_extended_data_block(const uint8_t *edid,
@@ -455,16 +484,11 @@ drm_fb_get_from_vasurf(struct drm_va_display *d,
 /* drm-hdr-metadata.c */
 uint32_t
 drm_tone_mapping_mode(struct weston_hdr_metadata *content_md,
-		struct drm_edid_hdr_metadata_static *target_md);
-
-int
-drm_prepare_output_hdr_metadata(struct drm_backend *b,
-		struct weston_hdr_metadata *surface_md,
-		struct drm_edid_hdr_metadata_static *display_md,
-		struct drm_hdr_metadata_static *out_md);
+		struct drm_hdr_metadata_static *target_md);
 
 struct drm_edid_hdr_metadata_static *
-drm_get_hdr_metadata(const uint8_t *edid, uint32_t edid_len);
+drm_get_display_hdr_metadata(const uint8_t *edid, uint32_t edid_len);
+
 uint16_t
 drm_get_display_clrspace(const uint8_t *edid, uint32_t edid_len);
 
