@@ -37,6 +37,27 @@ extern "C" {
 
 #define WESTON_DRM_BACKEND_CONFIG_VERSION 3
 
+/* Monitor's HDR metadata */
+struct drm_edid_hdr_metadata_static {
+	uint8_t eotf;
+	uint8_t metadata_type;
+	uint8_t desired_max_ll;
+	uint8_t desired_max_fall;
+	uint8_t desired_min_ll;
+};
+
+/* Monitor's color primaries */
+struct drm_display_color_primaries {
+	uint16_t display_primary_r_x;
+	uint16_t display_primary_r_y;
+	uint16_t display_primary_g_x;
+	uint16_t display_primary_g_y;
+	uint16_t display_primary_b_x;
+	uint16_t display_primary_b_y;
+	uint16_t white_point_x;
+	uint16_t white_point_y;
+};
+
 struct libinput_device;
 
 enum weston_drm_backend_output_mode {
@@ -224,6 +245,20 @@ struct weston_drm_backend_config {
 	/** Use shadow buffer if using Pixman-renderer. */
 	bool use_pixman_shadow;
 };
+
+/* drm-hdr-metadata.c */
+struct drm_edid_hdr_metadata_static *
+drm_get_display_hdr_metadata(const uint8_t *edid, uint32_t edid_len);
+
+uint16_t
+drm_get_display_clrspace(const uint8_t *edid, uint32_t edid_len);
+
+void
+drm_get_color_primaries(struct drm_display_color_primaries *p,
+		const uint8_t *edid);
+
+void
+drm_release_hdr_metadata(struct drm_edid_hdr_metadata_static *md);
 
 #ifdef  __cplusplus
 }
