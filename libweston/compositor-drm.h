@@ -37,6 +37,21 @@ extern "C" {
 
 #define WESTON_DRM_BACKEND_CONFIG_VERSION 3
 
+/* From drm_connector.c */
+#define DRM_MODE_COLORIMETRY_DEFAULT 			0
+#define DRM_MODE_COLORIMETRY_BT2020_RGB		9
+#define DRM_MODE_COLORIMETRY_BT2020_YCC		10
+#define DRM_MODE_COLORIMETRY_DCI_P3_RGB_D65		11
+#define DRM_MODE_COLORIMETRY_DCI_P3_RGB_THEATER	12
+
+enum drm_colorspace {
+	DRM_COLORSPACE_INVALID,
+	DRM_COLORSPACE_REC709,
+	DRM_COLORSPACE_DCIP3,
+	DRM_COLORSPACE_REC2020,
+	DRM_COLORSPACE_MAX,
+};
+
 /* Static HDR metadata to be sent to kernel, matches kernel structure */
 struct drm_hdr_metadata_static {
 	uint8_t eotf;
