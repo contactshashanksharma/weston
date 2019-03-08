@@ -3946,6 +3946,28 @@ drm_propose_state_mode_to_string(enum drm_output_propose_state_mode mode)
 #define MIN_IF_NT_ZERO(c, d) (c ? MIN(c, d) : d)
 
 static void
+drm_clear_conn_color_state(struct drm_backend *b,
+			struct drm_head *head)
+{
+	struct drm_conn_color_state *cs = &head->color_state;
+	memset(cs, 0, sizeof(*cs));
+	cs->changed = 1;
+}
+
+static void
+drm_handle_hdr_view_reset(struct drm_backend *b,
+		struct weston_output *output_base)
+{
+	struct weston_head *w_head = weston_output_get_first_head(output_base);
+	struct drm_head *head = to_drm_head(w_head);
+
+	if (!head)
+		return;
+
+	drm_clear_conn_color_state(b, head);
+}
+
+static void
 drm_prepare_output_hdr_metadata(struct drm_backend *b,
 		struct drm_head *head,
 		struct weston_hdr_metadata *surface_md,
@@ -4299,6 +4321,15 @@ drm_assign_planes(struct weston_output *output_base, void *repaint_data)
 		}
 
 		return;
+	} else {
+		/* If this is first SDR view after a HDR view, do following:
+		* Reset the output HDR metadata
+		* Reset the output colorspace
+		*/
+		if (output->output_is_hdr) {
+			drm_handle_hdr_view_reset(b, output_base);
+			output->output_is_hdr = false;
+		}
 	}
 
 normal_assign:
