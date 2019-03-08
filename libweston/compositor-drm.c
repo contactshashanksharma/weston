@@ -514,6 +514,12 @@ struct drm_head {
 	uint32_t connector_id;
 	struct drm_edid edid;
 
+	/* Display's static HDR metadata */
+	struct drm_edid_hdr_metadata_static *hdr_md;
+
+	/* Display's supported color spaces */
+	uint32_t clrspaces;
+
 	/* Holds the properties for the connector */
 	struct drm_property_info props_conn[WDRM_CONNECTOR__COUNT];
 
@@ -5362,6 +5368,13 @@ find_and_parse_output_edid(struct drm_head *head,
 		if (head->edid.serial_number[0] != '\0')
 			*serial_number = head->edid.serial_number;
 	}
+
+	if (head->hdr_md)
+		drm_release_hdr_metadata(head->hdr_md);
+	head->hdr_md = drm_get_display_hdr_metadata(edid_blob->data,
+		edid_blob->length);
+	head->clrspaces = drm_get_display_clrspace(edid_blob->data,
+		edid_blob->length);
 	drmModeFreePropertyBlob(edid_blob);
 }
 
@@ -6510,6 +6523,9 @@ drm_head_destroy(struct drm_head *head)
 
 	drm_property_info_free(head->props_conn, WDRM_CONNECTOR__COUNT);
 	drmModeFreeConnector(head->connector);
+
+	if (head->hdr_md)
+		drm_release_hdr_metadata(head->hdr_md);
 
 	if (head->backlight)
 		backlight_destroy(head->backlight);
