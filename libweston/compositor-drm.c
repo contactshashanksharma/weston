@@ -4016,6 +4016,22 @@ drm_propose_state_mode_to_string(enum drm_output_propose_state_mode mode)
 #define MIN_IF_NT_ZERO(c, d) (c ? MIN(c, d) : d)
 
 static void
+drm_clear_plane_color_state(struct drm_backend *b)
+{
+	struct drm_plane *p;
+
+	wl_list_for_each(p, &b->plane_list, link) {
+		struct drm_plane_color_state *cs;
+		if (p->type != WDRM_PLANE_TYPE_OVERLAY)
+			continue;
+
+		cs = &p->clr_state;
+		memset(cs, 0, sizeof(*cs));
+		cs->changed = true;
+	}
+}
+
+static void
 drm_clear_conn_color_state(struct drm_backend *b,
 			struct drm_head *head)
 {
@@ -4035,6 +4051,7 @@ drm_handle_hdr_view_reset(struct drm_backend *b,
 		return;
 
 	drm_clear_conn_color_state(b, head);
+	drm_clear_plane_color_state(b);
 }
 
 static void
