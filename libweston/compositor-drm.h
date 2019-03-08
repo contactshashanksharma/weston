@@ -44,6 +44,28 @@ extern "C" {
 #define DRM_MODE_COLORIMETRY_DCI_P3_RGB_D65		11
 #define DRM_MODE_COLORIMETRY_DCI_P3_RGB_THEATER	12
 
+/* Colorspace bits */
+#define EDID_CS_BT2020RGB (1 << 7)
+#define EDID_CS_BT2020YCC (1 << 6)
+#define EDID_CS_BT2020CYCC (1 << 5)
+#define EDID_CS_DCIP3 (1 << 15)
+#define EDID_CS_HDR_GAMUT_MASK (EDID_CS_BT2020RGB | \
+			EDID_CS_BT2020YCC | \
+			EDID_CS_BT2020CYCC | \
+			EDID_CS_DCIP3)
+#define EDID_CS_HDR_CS_BASIC (EDID_CS_BT2020RGB | \
+		EDID_CS_DCIP3 | \
+		EDID_CS_BT2020YCC)
+
+/* CTA-861-G: HDR Metadata names and types */
+enum drm_hdr_eotf_type {
+	DRM_EOTF_SDR_TRADITIONAL = 0,
+	DRM_EOTF_HDR_TRADITIONAL,
+	DRM_EOTF_HDR_ST2084,
+	DRM_EOTF_HLG_BT2100,
+	DRM_EOTF_MAX
+};
+
 enum drm_colorspace {
 	DRM_COLORSPACE_INVALID,
 	DRM_COLORSPACE_REC709,
@@ -304,6 +326,9 @@ drm_get_color_primaries(struct drm_display_color_primaries *p,
 
 void
 drm_release_hdr_metadata(struct drm_edid_hdr_metadata_static *md);
+
+uint16_t
+color_primary(short val);
 
 #ifdef  __cplusplus
 }

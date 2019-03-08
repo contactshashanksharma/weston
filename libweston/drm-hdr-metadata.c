@@ -123,7 +123,7 @@ edid_find_extended_data_block(const uint8_t *edid,
 	return NULL;
 }
 
-static uint16_t
+uint16_t
 color_primary(short val)
 {
 	short temp = val & 0x3FF;

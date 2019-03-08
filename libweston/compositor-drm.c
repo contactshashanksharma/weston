@@ -587,6 +587,9 @@ struct drm_output {
 	bool virtual;
 
 	submit_frame_cb virtual_submit_frame;
+
+	/* HDR sesstion is active */
+	bool output_is_hdr;
 };
 
 static const char *const aspect_ratio_as_string[] = {
@@ -3901,6 +3904,169 @@ drm_propose_state_mode_to_string(enum drm_output_propose_state_mode mode)
 	return drm_output_propose_state_mode_as_string[mode];
 }
 
+#define MIN_IF_NT_ZERO(c, d) (c ? MIN(c, d) : d)
+
+static void
+drm_prepare_output_hdr_metadata(struct drm_backend *b,
+		struct drm_head *head,
+		struct weston_hdr_metadata *surface_md,
+		struct drm_hdr_metadata_static *out_md)
+{
+	struct weston_hdr_metadata_static *c_md;
+	struct drm_edid_hdr_metadata_static *d_md;
+	struct drm_display_color_primaries *p;
+
+	memset(out_md, 0, sizeof(*out_md));
+
+	c_md = &surface_md->metadata.static_metadata;
+	d_md = head->hdr_md;
+	p = &head->primaries;
+
+	/* This function gets called only when there is an input HDR surface,
+	* which means we have to handle only H2S or H2H cases */
+	if (d_md) {
+		/* H2H case */
+		out_md->max_cll = c_md->max_cll;
+		out_md->max_fall = c_md->max_fall;
+		out_md->max_mastering_luminance = c_md->max_luminance;
+		out_md->min_mastering_luminance = c_md->min_luminance;
+		out_md->white_point_x = MIN_IF_NT_ZERO(
+			color_primary(c_md->white_point_x),
+			p->white_point_x);
+		out_md->white_point_y = MIN_IF_NT_ZERO(
+			color_primary(c_md->white_point_y),
+			p->white_point_y);
+		out_md->primary_r_x = MIN_IF_NT_ZERO(
+			color_primary(c_md->display_primary_r_x),
+			p->display_primary_r_x);
+		out_md->primary_r_y = MIN_IF_NT_ZERO(
+			color_primary(c_md->display_primary_r_y),
+			p->display_primary_r_y);
+		out_md->primary_g_x = MIN_IF_NT_ZERO(
+			color_primary(c_md->display_primary_g_x),
+			p->display_primary_g_x);
+		out_md->primary_g_y = MIN_IF_NT_ZERO(
+			color_primary(c_md->display_primary_g_y),
+			p->display_primary_g_y);
+		out_md->primary_b_x = MIN_IF_NT_ZERO(
+			color_primary(c_md->display_primary_b_x),
+			p->display_primary_b_x);
+		out_md->primary_b_y = MIN_IF_NT_ZERO(
+			color_primary(c_md->display_primary_b_y),
+			p->display_primary_b_y);
+
+		out_md->eotf = DRM_EOTF_HDR_ST2084;
+		out_md->metadata_type = 1;
+	}
+}
+
+static int
+drm_mode_create_property_blob(struct drm_backend *b,
+		void *blob_data, size_t blob_len, uint32_t *blob_id)
+{
+	return drmModeCreatePropertyBlob(b->drm.fd,
+				blob_data,
+				blob_len,
+				blob_id);
+}
+
+static int
+drm_prepare_conn_hdr_metadata_blob(struct drm_backend *b,
+	struct weston_surface *hdr_surf,
+	struct drm_head *drm_head,
+	struct drm_conn_color_state *target)
+{
+	int ret;
+	uint32_t blob_id = 0;
+
+	/* Prepare and setup tone mapping metadata as output metadata */
+	drm_prepare_output_hdr_metadata(b,
+			drm_head,
+			hdr_surf->hdr_metadata,
+			&target->o_md);
+
+	/* create blob to be set during next commit */
+	ret = drm_mode_create_property_blob(b, (void *)&target->o_md,
+					sizeof(target->o_md),
+					&blob_id);
+	if (ret || !blob_id) {
+		drm_debug(b, "\t\t\t[view] Set HDR blob failed\n");
+		return -1;
+	}
+
+	return blob_id;
+}
+
+static int
+drm_prepare_conn_color_state(struct drm_backend *b,
+			struct weston_output *output_base,
+			struct weston_surface *hdr_surf)
+{
+	uint32_t blob_id = 0;
+	struct drm_output *output = to_drm_output(output_base);
+	struct drm_edid_hdr_metadata_static *display_md;
+	struct weston_head *w_head = weston_output_get_first_head(&output->base);
+	struct drm_head *drm_head = to_drm_head(w_head);
+	struct drm_conn_color_state *target;
+	enum drm_colorspace target_cs = DRM_COLORSPACE_REC709;
+	uint8_t target_eotf = DRM_EOTF_SDR_TRADITIONAL;
+	uint16_t display_cs = drm_head->clrspaces & EDID_CS_HDR_CS_BASIC;
+
+	if (!drm_head)
+		return 0;
+
+	/* This is an active HDR session, so the state is already set */
+	if (output->output_is_hdr)
+		return 0;
+
+	display_md = drm_head->hdr_md;
+	target = &drm_head->color_state;
+
+	/* Can this display HW handle HDR ? */
+	if (!target->can_handle_hdr) {
+		drm_debug(b, "\t\t\t[view] HW is not HDR capable, fall to renderer\n");
+		return -1;
+	}
+
+	if (display_md && display_cs) {
+		/* Display is HDR and supports bsdic HDR wide gamuts */
+		target_eotf = DRM_EOTF_HDR_ST2084;
+		if (display_cs & EDID_CS_BT2020RGB)
+			target_cs = DRM_COLORSPACE_REC2020;
+		else
+			target_cs = DRM_COLORSPACE_DCIP3;
+	}
+
+	blob_id = drm_prepare_conn_hdr_metadata_blob(b, hdr_surf, drm_head, target);
+	if (blob_id <= 0) {
+		drm_debug(b, "\t\t\t[view] failed to setup output hdr metadata\n");
+		return -1;
+	}
+
+	/* TODO: Setup output gamma here */
+	target->o_eotf = target_eotf;
+	target->o_cs = target_cs;
+	target->changed = true;
+	target->hdr_md_blob_id = blob_id;
+	target->output_is_hdr = true;
+	return 0;
+}
+
+
+static inline struct weston_surface *
+drm_view_is_hdr(struct weston_output *output_base)
+{
+	struct weston_view *ev;
+	struct weston_surface *hdr_surface = NULL;
+	/* Check if we are dealing with HDR view */
+	wl_list_for_each(ev, &output_base->compositor->view_list, link) {
+		hdr_surface = ev->surface;
+		if (hdr_surface && hdr_surface->hdr_metadata)
+			return hdr_surface;
+	}
+	return NULL;
+}
+
 static void
 drm_assign_planes(struct weston_output *output_base, void *repaint_data)
 {
@@ -3912,10 +4078,30 @@ drm_assign_planes(struct weston_output *output_base, void *repaint_data)
 	struct weston_view *ev;
 	struct weston_plane *primary = &output_base->compositor->primary_plane;
 	enum drm_output_propose_state_mode mode = DRM_OUTPUT_PROPOSE_STATE_PLANES_ONLY;
+	struct weston_surface *hdr_surface = NULL;
+	int ret;
 
 	drm_debug(b, "\t[repaint] preparing state for output %s (%lu)\n",
 		  output_base->name, (unsigned long) output_base->id);
 
+	hdr_surface = drm_view_is_hdr(output_base);
+	if (hdr_surface) {
+
+		/* This is a HDR view, handle following:
+		* Handle tone mapping of each buffer
+		* Handle output HDR metadata (in first HDR view)
+		* Handle output colorspace (in first HDR view)
+		*/
+		ret = drm_prepare_conn_color_state(b, output_base, hdr_surface);
+		if (ret) {
+			weston_log("Failed to create HDR target\n");
+			goto normal_assign;
+		}
+
+		return;
+	}
+
+normal_assign:
 	if (!b->sprites_are_broken && !output->virtual) {
 		drm_debug(b, "\t[repaint] trying planes-only build state\n");
 		state = drm_output_propose_state(output_base, pending_state, mode);
