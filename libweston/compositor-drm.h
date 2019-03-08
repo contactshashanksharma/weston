@@ -37,6 +37,36 @@ extern "C" {
 
 #define WESTON_DRM_BACKEND_CONFIG_VERSION 3
 
+/* Static HDR metadata to be sent to kernel, matches kernel structure */
+struct drm_hdr_metadata_static {
+	uint8_t eotf;
+	uint8_t metadata_type;
+	uint16_t primary_r_x;
+	uint16_t primary_r_y;
+	uint16_t primary_g_x;
+	uint16_t primary_g_y;
+	uint16_t primary_b_x;
+	uint16_t primary_b_y;
+	uint16_t white_point_x;
+	uint16_t white_point_y;
+	uint16_t max_mastering_luminance;
+	uint16_t min_mastering_luminance;
+	uint16_t max_fall;
+	uint16_t max_cll;
+};
+
+/* Connector's color correction status */
+struct drm_conn_color_state {
+	bool changed;
+	bool can_handle_hdr;
+	bool output_is_hdr;
+
+	uint8_t o_cs;
+	uint8_t o_eotf;
+	uint32_t hdr_md_blob_id;
+	struct drm_hdr_metadata_static o_md;
+};
+
 /* Monitor's HDR metadata */
 struct drm_edid_hdr_metadata_static {
 	uint8_t eotf;

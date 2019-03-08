@@ -226,6 +226,7 @@ enum wdrm_connector_property {
 	WDRM_CONNECTOR_DPMS,
 	WDRM_CONNECTOR_CRTC_ID,
 	WDRM_CONNECTOR_NON_DESKTOP,
+	WDRM_CONNECTOR_HDR_METADATA,
 	WDRM_CONNECTOR__COUNT
 };
 
@@ -261,6 +262,7 @@ static const struct drm_property_info connector_props[] = {
 	},
 	[WDRM_CONNECTOR_CRTC_ID] = { .name = "CRTC_ID", },
 	[WDRM_CONNECTOR_NON_DESKTOP] = { .name = "non-desktop", },
+	[WDRM_CONNECTOR_HDR_METADATA] = { .name = "HDR_OUTPUT_METADATA", },
 };
 
 /**
@@ -522,6 +524,9 @@ struct drm_head {
 
 	/* Display's supported color spaces */
 	uint32_t clrspaces;
+
+	/* Connector's color correction status */
+	struct drm_conn_color_state color_state;
 
 	/* Holds the properties for the connector */
 	struct drm_property_info props_conn[WDRM_CONNECTOR__COUNT];
@@ -2525,6 +2530,31 @@ drm_mode_ensure_blob(struct drm_backend *backend, struct drm_mode *mode)
 }
 
 static int
+connector_add_color_correction(drmModeAtomicReq *req,
+		struct drm_head *head, uint32_t flags)
+{
+	int ret;
+	struct drm_conn_color_state *conn_state = &head->color_state;
+
+	if (!conn_state->changed)
+		return 0;
+
+	ret = connector_add_prop(req,
+			head,
+			WDRM_CONNECTOR_HDR_METADATA,
+			conn_state->hdr_md_blob_id);
+	if (ret != 0) {
+		weston_log("Failed to apply output HDR metadata\n");
+		return ret;
+	}
+
+	if (!(flags & DRM_MODE_ATOMIC_TEST_ONLY))
+		conn_state->changed = false;
+
+	return 0;
+}
+
+static int
 drm_output_apply_state_atomic(struct drm_output_state *state,
 			      drmModeAtomicReq *req,
 			      uint32_t *flags)
@@ -2559,6 +2589,7 @@ drm_output_apply_state_atomic(struct drm_output_state *state,
 		wl_list_for_each(head, &output->base.head_list, base.output_link) {
 			ret |= connector_add_prop(req, head, WDRM_CONNECTOR_CRTC_ID,
 						  output->crtc_id);
+			ret |= connector_add_color_correction(req, head, *flags);
 		}
 	} else {
 		ret |= crtc_add_prop(req, output, WDRM_CRTC_MODE_ID, 0);
@@ -6524,6 +6555,8 @@ err_alloc:
 static void
 drm_head_destroy(struct drm_head *head)
 {
+	struct drm_backend *b = head->backend;
+
 	weston_head_release(&head->base);
 
 	drm_property_info_free(head->props_conn, WDRM_CONNECTOR__COUNT);
@@ -6534,6 +6567,9 @@ drm_head_destroy(struct drm_head *head)
 
 	if (head->backlight)
 		backlight_destroy(head->backlight);
+
+	if (head->color_state.hdr_md_blob_id)
+		drmModeDestroyPropertyBlob(b->drm.fd, head->color_state.hdr_md_blob_id);
 
 	free(head);
 }
