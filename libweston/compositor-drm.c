@@ -227,6 +227,7 @@ enum wdrm_connector_property {
 	WDRM_CONNECTOR_CRTC_ID,
 	WDRM_CONNECTOR_NON_DESKTOP,
 	WDRM_CONNECTOR_HDR_METADATA,
+	WDRM_CONNECTOR_OUTPUT_COLORSPACE,
 	WDRM_CONNECTOR__COUNT
 };
 
@@ -263,6 +264,7 @@ static const struct drm_property_info connector_props[] = {
 	[WDRM_CONNECTOR_CRTC_ID] = { .name = "CRTC_ID", },
 	[WDRM_CONNECTOR_NON_DESKTOP] = { .name = "non-desktop", },
 	[WDRM_CONNECTOR_HDR_METADATA] = { .name = "HDR_OUTPUT_METADATA", },
+	[WDRM_CONNECTOR_OUTPUT_COLORSPACE] = {.name = "Colorspace", },
 };
 
 /**
@@ -2529,11 +2531,27 @@ drm_mode_ensure_blob(struct drm_backend *backend, struct drm_mode *mode)
 	return ret;
 }
 
+/* Return the colorspace values to be going to AVI infoframe */
+static inline uint32_t
+to_kernel_colorspace(uint8_t colorspace)
+{
+	switch(colorspace) {
+	case DRM_COLORSPACE_DCIP3:
+		return DRM_MODE_COLORIMETRY_DCI_P3_RGB_D65;
+	case DRM_COLORSPACE_REC2020:
+		return DRM_MODE_COLORIMETRY_BT2020_RGB;
+	case DRM_COLORSPACE_REC709:
+	default:
+		return DRM_MODE_COLORIMETRY_DEFAULT;
+	}
+}
+
 static int
 connector_add_color_correction(drmModeAtomicReq *req,
 		struct drm_head *head, uint32_t flags)
 {
 	int ret;
+	uint32_t kernel_cs;
 	struct drm_conn_color_state *conn_state = &head->color_state;
 
 	if (!conn_state->changed)
@@ -2545,6 +2563,16 @@ connector_add_color_correction(drmModeAtomicReq *req,
 			conn_state->hdr_md_blob_id);
 	if (ret != 0) {
 		weston_log("Failed to apply output HDR metadata\n");
+		return ret;
+	}
+
+	kernel_cs = to_kernel_colorspace(conn_state->o_cs);
+	ret = connector_add_prop(req,
+			head,
+			WDRM_CONNECTOR_OUTPUT_COLORSPACE,
+			kernel_cs);
+	if (ret != 0) {
+		weston_log("Failed to apply output colorspace\n");
 		return ret;
 	}
 
