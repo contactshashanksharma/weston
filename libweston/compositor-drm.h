@@ -28,6 +28,12 @@
 #ifndef WESTON_COMPOSITOR_DRM_H
 #define WESTON_COMPOSITOR_DRM_H
 
+#include <va/va.h>
+#include <va/va_vpp.h>
+#include <va/va_drm.h>
+#include <va/va_drmcommon.h>
+#include <drm/drm_fourcc.h>
+
 #include "compositor.h"
 #include "libinput-seat.h"
 #include "plugin-registry.h"
@@ -58,6 +64,10 @@ extern "C" {
 		EDID_CS_DCIP3 | \
 		EDID_CS_BT2020YCC)
 
+#ifndef DRM_FORMAT_P010
+#define DRM_FORMAT_P010		 fourcc_code('P', '0', '1', '0')
+#endif
+
 /* CTA-861-G: HDR Metadata names and types */
 enum drm_hdr_eotf_type {
 	DRM_EOTF_SDR_TRADITIONAL = 0,
@@ -65,6 +75,14 @@ enum drm_hdr_eotf_type {
 	DRM_EOTF_HDR_ST2084,
 	DRM_EOTF_HLG_BT2100,
 	DRM_EOTF_MAX
+};
+
+/* Match libva values 1:1 */
+enum drm_tone_map_mode {
+	DRM_TONE_MAPPING_NONE = 0,
+	DRM_TONE_MAPPING_HDR_TO_HDR = 1,
+	DRM_TONE_MAPPING_HDR_TO_SDR = 2,
+	DRM_TONE_MAPPING_SDR_TO_HDR = 8,
 };
 
 enum drm_colorspace {
@@ -188,6 +206,12 @@ struct drm_hdr_metadata_static {
 	uint16_t max_cll;
 };
 
+struct drm_tone_map {
+	enum drm_tone_map_mode tm_mode;
+	struct drm_hdr_metadata_static target_md;
+	struct drm_fb *old_fb;
+};
+
 /* Connector's color correction status */
 struct drm_conn_color_state {
 	bool changed;
@@ -219,6 +243,30 @@ struct drm_display_color_primaries {
 	uint16_t display_primary_b_y;
 	uint16_t white_point_x;
 	uint16_t white_point_y;
+};
+
+struct drm_va_display {
+	int render_fd;
+	int drm_fd;
+	int32_t major_ver;
+	int32_t minor_ver;
+	int32_t width;
+	int32_t height;
+
+	VAConfigID cfg_id;
+	VAConfigID ctx_id;
+	VADisplay va_display;
+	VAConfigAttrib attrib;
+	VABufferID pparam_buf_id;
+	VABufferID fparam_buf_id;
+	VASurfaceID output_surf_id;
+	VAHdrMetaData output_metadata;
+	VAHdrMetaDataHDR10 out_md_params;
+	VAHdrMetaDataHDR10 in_hdr10_md;
+	VAProcPipelineParameterBuffer pparam;
+	VAProcFilterParameterBufferHDRToneMapping hdr_tm_param;
+
+	struct drm_backend *b;
 };
 
 struct libinput_device;
@@ -409,6 +457,13 @@ struct weston_drm_backend_config {
 	bool use_pixman_shadow;
 };
 
+int
+drm_fb_addfb(struct drm_backend *b, struct drm_fb *fb);
+
+struct drm_fb *
+drm_fb_get_from_vasurf(struct drm_va_display *d,
+			VADRMPRIMESurfaceDescriptor *va_desc);
+
 /* drm-hdr-metadata.c */
 struct drm_edid_hdr_metadata_static *
 drm_get_display_hdr_metadata(const uint8_t *edid, uint32_t edid_len);
@@ -425,6 +480,19 @@ drm_release_hdr_metadata(struct drm_edid_hdr_metadata_static *md);
 
 uint16_t
 color_primary(short val);
+
+/* drm-va-hdr.c */
+struct drm_va_display *
+drm_va_create_display(struct drm_backend *b);
+
+void
+drm_va_destroy_display(struct drm_va_display *d);
+
+struct drm_fb *
+drm_va_tone_map(struct drm_va_display *d,
+		struct drm_fb *fb,
+		struct weston_hdr_metadata *content_md,
+		struct drm_tone_map *tm);
 
 #ifdef  __cplusplus
 }

@@ -48,7 +48,6 @@
 #include <drm_fourcc.h>
 
 #include <gbm.h>
-#include <libudev.h>
 
 #include "compositor.h"
 #include "compositor-drm.h"
@@ -494,6 +493,9 @@ struct drm_output {
 
 	/* HDR sesstion is active */
 	bool output_is_hdr;
+
+	/* libVA initialization handle */
+	struct drm_va_display *va_display;
 };
 
 static const char *const aspect_ratio_as_string[] = {
@@ -906,7 +908,7 @@ drm_fb_destroy_gbm(struct gbm_bo *bo, void *data)
 	drm_fb_destroy(fb);
 }
 
-static int
+int
 drm_fb_addfb(struct drm_backend *b, struct drm_fb *fb)
 {
 	int ret = -EINVAL;
@@ -1045,6 +1047,86 @@ drm_fb_destroy_dmabuf(struct drm_fb *fb)
 	if (fb->bo)
 		gbm_bo_destroy(fb->bo);
 	drm_fb_destroy(fb);
+}
+
+/* Extract a DRM framebuffer from va surface */
+struct drm_fb *
+drm_fb_get_from_vasurf(struct drm_va_display *d,
+			VADRMPRIMESurfaceDescriptor *va_desc)
+{
+	int i = 0;
+	int prime_fd = -1;
+	struct drm_fb *fb;
+
+	if (!d || !va_desc) {
+		weston_log("VA: Null inputs to add fb from vasurf\n");
+	return NULL;
+	}
+
+#ifdef HDR_DEBUG
+	drm_print_va_buffer_desc(va_desc);
+#endif
+
+	if (va_desc->num_objects != 1 || va_desc->num_layers != 1) {
+		weston_log("VA: unsupported vasurf descriptor\n");
+		return NULL;
+	}
+
+	fb = zalloc(sizeof *fb);
+	if (fb == NULL)
+		return NULL;
+
+	fb->refcnt = 1;
+	fb->type = BUFFER_DMABUF;
+	fb->fd = d->drm_fd;
+	fb->width = (int)va_desc->width;
+	fb->height = (int)va_desc->height;
+	fb->modifier = va_desc->objects[0].drm_format_modifier;
+	fb->size = va_desc->objects[0].size;
+	fb->format = pixel_format_get_info(va_desc->layers[0].drm_format);
+	if (!fb->format) {
+		weston_log("VA: couldn't look up format info for 0x%lx\n",
+			   (unsigned long) va_desc->fourcc);
+		goto err_free;
+	}
+
+	fb->format = pixel_format_get_opaque_substitute(fb->format);
+	fb->num_planes = (int)va_desc->layers[0].num_planes;
+	prime_fd = va_desc->objects[0].fd;
+	for (i = 0; i < fb->num_planes; i++) {
+		int ret;
+		uint32_t handle = 0;
+
+		fb->strides[i] = va_desc->layers[0].pitch[i];
+		fb->offsets[i] = va_desc->layers[0].offset[i];
+
+		ret = drmPrimeFDToHandle(d->drm_fd, prime_fd, &handle);
+		if (ret || !handle) {
+			weston_log("VA: Failed to get handle(plane %d)\n", i);
+			goto err_free;
+		}
+
+		fb->handles[i] = handle;
+	}
+
+#ifdef HDR_DEBUG
+	drm_print_fb_desc(fb);
+#endif
+
+	if (drm_fb_addfb(d->b, fb) != 0) {
+		weston_log("VA: Couldn't add fb\n");
+		goto err_free;
+	}
+
+	for (i = 0; i < (int)va_desc->num_objects; i++)
+		close(va_desc->objects[i].fd);
+	return fb;
+
+err_free:
+	drm_fb_destroy(fb);
+	 for (i = 0; i < (int)va_desc->num_objects; i++)
+        close(va_desc->objects[i].fd);
+	return NULL;
 }
 
 static struct drm_fb *
@@ -3183,10 +3265,31 @@ atomic_flip_handler(int fd, unsigned int frame, unsigned int sec,
 }
 #endif
 
+static struct drm_fb *
+drm_do_tone_mapping(struct drm_output *output,
+		struct drm_backend *b,
+		struct weston_view *ev,
+		struct drm_fb *fb,
+		struct drm_tone_map *tm)
+{
+	struct drm_fb *tm_fb;
+	struct weston_hdr_metadata *surf_md = ev->surface->hdr_metadata;
+
+	/* Tone map the buffer as per output hdr metadata */
+	tm_fb = drm_va_tone_map(output->va_display, fb, surf_md, tm);
+	if (!tm_fb) {
+		weston_log("Tone mapping failed\n");
+		return NULL;
+	}
+
+	return tm_fb;
+}
+
 static struct drm_plane_state *
 drm_output_prepare_overlay_view(struct drm_output_state *output_state,
 				struct weston_view *ev,
-				enum drm_output_propose_state_mode mode)
+				enum drm_output_propose_state_mode mode,
+				struct drm_tone_map *tm)
 {
 	struct drm_output *output = output_state->output;
 	struct weston_compositor *ec = output->base.compositor;
@@ -3194,6 +3297,7 @@ drm_output_prepare_overlay_view(struct drm_output_state *output_state,
 	struct drm_plane *p;
 	struct drm_plane_state *state = NULL;
 	struct drm_fb *fb;
+	struct drm_fb *tm_fb = NULL;
 	unsigned int i;
 	int ret;
 	enum {
@@ -3210,6 +3314,22 @@ drm_output_prepare_overlay_view(struct drm_output_state *output_state,
 		drm_debug(b, "\t\t\t\t[overlay] not placing view %p on overlay: "
 			     " couldn't get fb\n", ev);
 		return NULL;
+	}
+
+	if (tm) {
+		tm_fb = drm_do_tone_mapping(output, b, ev, fb, tm);
+		if (!tm_fb) {
+			weston_log("Tone mapping failed\n");
+			return NULL;
+		}
+
+		/* Replace the framebuffer with tone mapped one, but keep old
+		* one for atomic check failure case */
+		tm->old_fb = fb;
+		fb = tm_fb;
+		drm_fb_set_buffer(tm_fb,
+				ev->surface->buffer_ref.buffer,
+				ev->surface->buffer_release_ref.buffer_release);
 	}
 
 	wl_list_for_each(p, &b->plane_list, link) {
@@ -3310,7 +3430,22 @@ drm_output_prepare_overlay_view(struct drm_output_state *output_state,
 				     "view %p on overlay %d in mixed mode\n",
 				  ev, p->plane_id);
 			availability = PLACED_ON_PLANE;
+
+			/* If tone mapping was done, free the old buffer */
+			if (tm && tm->old_fb)
+				drm_fb_destroy_dmabuf(tm->old_fb);
+
 			goto out;
+		} else {
+			/* Tone mapping was success but atomic test failed, so restore
+			* the old framebuffer */
+			if (tm) {
+				drm_fb_set_buffer(tm->old_fb,
+						ev->surface->buffer_ref.buffer,
+						ev->surface->buffer_release_ref.buffer_release);
+				drm_fb_destroy_dmabuf(fb);
+				fb = tm->old_fb;
+			}
 		}
 
 		drm_debug(b, "\t\t\t\t[overlay] not placing view %p on overlay %lu "
@@ -3729,7 +3864,7 @@ drm_output_propose_state(struct weston_output *output_base,
 			ps = drm_output_prepare_scanout_view(state, ev, mode);
 
 		if (!ps && !overlay_occluded && !force_renderer)
-			ps = drm_output_prepare_overlay_view(state, ev, mode);
+			ps = drm_output_prepare_overlay_view(state, ev, mode, NULL);
 
 		if (ps) {
 			/* If we have been assigned to an overlay or scanout
@@ -3956,6 +4091,40 @@ drm_prepare_conn_color_state(struct drm_backend *b,
 	return 0;
 }
 
+static uint32_t
+drm_tone_mapping_mode(struct weston_hdr_metadata *content_md,
+		struct drm_hdr_metadata_static *target_md)
+{
+	uint32_t tm_type;
+
+	/* HDR content and HDR display */
+	if (content_md && target_md)
+		tm_type = DRM_TONE_MAPPING_HDR_TO_HDR;
+
+	/* HDR content and SDR display */
+	if (content_md && !target_md)
+		tm_type = DRM_TONE_MAPPING_HDR_TO_SDR;
+
+	/* SDR content and HDR display */
+	if (!content_md && target_md)
+		tm_type = DRM_TONE_MAPPING_SDR_TO_HDR;
+
+	/* SDR content and SDR display */
+	if (!content_md && !target_md)
+		tm_type = DRM_TONE_MAPPING_NONE;
+
+	return tm_type;
+}
+
+static void
+drm_prepare_tone_map_state(struct drm_tone_map *tm,
+	struct weston_hdr_metadata *surf_md,
+	struct drm_hdr_metadata_static *target_md)
+{
+	tm->tm_mode = drm_tone_mapping_mode(surf_md, target_md);
+	memcpy(&tm->target_md, target_md, sizeof(tm->target_md));
+}
+
 static struct drm_output_state *
 drm_output_propose_hdr_state(struct weston_output *output_base,
 			     struct drm_pending_state *pending_state,
@@ -3986,6 +4155,7 @@ drm_output_propose_hdr_state(struct weston_output *output_base,
 
 	wl_list_for_each(ev, &output_base->compositor->view_list, link) {
 		struct weston_buffer *buffer = NULL;
+		struct drm_tone_map tm = {0,};
 
 		surface = ev->surface;
 		if (!surface)
@@ -4000,9 +4170,15 @@ drm_output_propose_hdr_state(struct weston_output *output_base,
 		surface->is_opaque = true;
 		ev->alpha = 1.0f;
 
+		drm_prepare_tone_map_state(&tm,
+					   surface->hdr_metadata,
+					   &conn_state->o_md);
+
 		/* Find plane for this surface */
-		ps = drm_output_prepare_overlay_view(state, ev,
-			DRM_OUTPUT_PROPOSE_STATE_PLANES_ONLY);
+		ps = drm_output_prepare_overlay_view(state,
+				ev,
+				DRM_OUTPUT_PROPOSE_STATE_PLANES_ONLY,
+				&tm);
 		if (!ps) {
 			drm_debug(b, "\t\t[view] prepare overlay view failed\n");
 			goto err;
@@ -6566,6 +6742,8 @@ drm_output_destroy(struct weston_output *base)
 	assert(!output->state_last);
 	drm_output_state_free(output->state_cur);
 
+	drm_va_destroy_display(output->va_display);
+
 	free(output);
 }
 
@@ -6851,6 +7029,10 @@ drm_output_create(struct weston_compositor *compositor, const char *name)
 	output->disable_pending = 0;
 
 	output->state_cur = drm_output_state_alloc(output, NULL);
+
+	output->va_display = drm_va_create_display(b);
+	if (!output->va_display)
+		weston_log("Failed to create VA display context\n");
 
 	weston_compositor_add_pending_output(&output->base, b->compositor);
 
