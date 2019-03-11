@@ -499,11 +499,38 @@ drm_va_create_display(struct drm_backend *b);
 void
 drm_va_destroy_display(struct drm_va_display *d);
 
+/* drm-color-transformation.c */
 struct drm_fb *
 drm_va_tone_map(struct drm_va_display *d,
 		struct drm_fb *fb,
 		struct weston_hdr_metadata *content_md,
 		struct drm_tone_map *tm);
+
+void
+generate_csc_lut(struct drm_backend *b,
+			double csc_matrix[3][3],
+		    enum drm_colorspace current,
+		    enum drm_colorspace target);
+
+struct drm_color_lut *
+generate_OETF_2084_lut(struct drm_backend *b,
+			int lut_size,
+			uint16_t max_val);
+
+struct drm_color_lut *
+generate_EOTF_2084_lut(struct drm_backend *b,
+			int lut_size,
+			uint16_t max_val);
+
+struct drm_color_lut *
+generate_gamma_lut(struct drm_backend *b,
+			 int lut_size,
+			 uint16_t max_val);
+
+struct drm_color_lut *
+generate_degamma_lut(struct drm_backend *b,
+			 int lut_size,
+			 uint16_t max_val);
 
 #ifdef  __cplusplus
 }

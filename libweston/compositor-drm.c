@@ -4119,6 +4119,134 @@ drm_mode_create_property_blob(struct drm_backend *b,
 }
 
 static int
+drm_prepare_plane_for_blending(struct drm_backend *b,
+	struct drm_plane_state *ps,
+	struct drm_conn_color_state *conn_state,
+	enum drm_colorspace surf_cs,
+	struct weston_surface *surf)
+{
+	int ret = 0;
+	double csc_lut[3][3] = {0,};
+	struct drm_color_lut *deg_lut = NULL;
+	struct drm_color_lut *gamma_lut = NULL;
+	struct drm_plane *p = ps->plane;
+	struct drm_plane_color_state *cs = &ps->plane->clr_state;
+
+	if (surf->hdr_metadata)
+		deg_lut = generate_EOTF_2084_lut(b, p->degamma_blob_size, 0xffff);
+	else
+		deg_lut = generate_degamma_lut(b, p->degamma_blob_size, 0xffff);
+	if (!deg_lut) {
+		weston_log("OOM while creating plane degamma blob\n");
+		ret = -1;
+		goto out;
+	}
+
+	if (conn_state->output_is_hdr)
+		gamma_lut = generate_OETF_2084_lut(b, p->gamma_blob_size, 0xffff);
+	else
+		gamma_lut = generate_gamma_lut(b, p->gamma_blob_size, 0xffff);
+	if (!gamma_lut) {
+		weston_log("OOM while creating plane gamma blob\n");
+		ret = -1;
+		goto out;
+	}
+
+	generate_csc_lut(b, csc_lut, surf_cs, conn_state->o_cs);
+
+	/* Create plane degamma blob */
+	ret = drm_mode_create_property_blob(b,
+			(uint8_t *)deg_lut,
+			p->degamma_blob_size * sizeof(struct drm_color_lut),
+			&cs->deg_blob_id);
+	if (ret) {
+		weston_log("Failed to create plane degamma prop blob\n");
+		cs->deg_blob_id = -1;
+		ret = -1;
+		goto out;
+	}
+
+	/* Create plane CSC blob */
+	ret = drm_mode_create_property_blob(b,
+			(void *)csc_lut,
+			9 * sizeof(double),
+			&cs->csc_blob_id);
+	if (ret) {
+		cs->csc_blob_id = -1;
+		weston_log("Failed to apply plane CTM blob\n");
+		ret = -1;
+		goto out;
+	}
+
+	/* Create plane gamma blob */
+	ret = drm_mode_create_property_blob(
+			b,
+			(uint8_t *)gamma_lut,
+			p->gamma_blob_size * sizeof(struct drm_color_lut),
+			&cs->gamma_blob_id);
+	if (ret) {
+		cs->gamma_blob_id = -1;
+		weston_log("Failed to apply plane Gamma blob\n");
+		ret = -1;
+		goto out;
+	}
+
+out:
+	if (deg_lut)
+		free(deg_lut);
+	if (gamma_lut)
+		free(gamma_lut);
+	return ret;
+}
+
+static int
+drm_prepare_plane_color_state(struct drm_backend *b,
+			      struct drm_plane_state *ps,
+			      struct drm_tone_map *tm,
+			      struct drm_conn_color_state *conn_state,
+			      struct weston_surface *surf)
+{
+	int ret;
+	struct drm_plane *p;
+	struct drm_plane_color_state *cs;
+	enum drm_colorspace surf_cs = DRM_COLORSPACE_REC709;
+
+	if (!ps || !surf || !conn_state)
+		return 0;
+
+	p = ps->plane;
+	if (!p)
+		return 0;
+
+	cs = &p->clr_state;
+	memcpy(&cs->tm, tm, sizeof(*tm));
+
+	/* HDR colorspace stack supoports only limited colorspaces, check for them
+	* else assume REC709 as default */
+	switch(surf->colorspace) {
+	case WESTON_CS_BT2020:
+		surf_cs = DRM_COLORSPACE_REC2020;
+		break;
+	case WESTON_CS_DCI_P3:
+		surf_cs = DRM_COLORSPACE_DCIP3;
+		break;
+	default:
+		break;
+	}
+
+	if (conn_state->o_cs != surf_cs) {
+		ret = drm_prepare_plane_for_blending(b, ps, conn_state, surf_cs, surf);
+		if (ret) {
+			weston_log("Failed to set plane color corrections\n");
+			return ret;
+		}
+		cs->changed = true;
+	}
+
+	return 0;
+}
+
+static int
 drm_prepare_conn_hdr_metadata_blob(struct drm_backend *b,
 	struct weston_surface *hdr_surf,
 	struct drm_head *drm_head,
@@ -4290,6 +4418,13 @@ drm_output_propose_hdr_state(struct weston_output *output_base,
 				&tm);
 		if (!ps) {
 			drm_debug(b, "\t\t[view] prepare overlay view failed\n");
+			goto err;
+		}
+
+		/* Apply plane color corrections */
+		ret = drm_prepare_plane_color_state(b, ps, &tm, conn_state, surface);
+		if (ret) {
+			drm_debug(b, "\t\t\t\t[view] Set plane color state failed\n");
 			goto err;
 		}
 	}
