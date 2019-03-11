@@ -212,6 +212,17 @@ struct drm_tone_map {
 	struct drm_fb *old_fb;
 };
 
+/* Plane's color correction state */
+struct drm_plane_color_state {
+	uint32_t csc_blob_id;
+	uint32_t deg_blob_id;
+	uint32_t gamma_blob_id;
+
+	struct drm_tone_map tm;
+	bool clr_correction_applied;
+	bool changed;
+};
+
 /* Connector's color correction status */
 struct drm_conn_color_state {
 	bool changed;

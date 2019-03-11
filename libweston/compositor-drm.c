@@ -171,6 +171,11 @@ enum wdrm_plane_property {
 	WDRM_PLANE_CRTC_ID,
 	WDRM_PLANE_IN_FORMATS,
 	WDRM_PLANE_IN_FENCE_FD,
+	WDRM_PLANE_DEGAMMA,
+	WDRM_PLANE_DEGAMMA_LUT_SZ,
+	WDRM_PLANE_CTM,
+	WDRM_PLANE_GAMMA,
+	WDRM_PLANE_GAMMA_LUT_SZ,
 	WDRM_PLANE__COUNT
 };
 
@@ -214,6 +219,11 @@ static const struct drm_property_info plane_props[] = {
 	[WDRM_PLANE_CRTC_ID] = { .name = "CRTC_ID", },
 	[WDRM_PLANE_IN_FORMATS] = { .name = "IN_FORMATS" },
 	[WDRM_PLANE_IN_FENCE_FD] = { .name = "IN_FENCE_FD" },
+	[WDRM_PLANE_DEGAMMA] = { .name = "PLANE_DEGAMMA_LUT" },
+	[WDRM_PLANE_DEGAMMA_LUT_SZ] = { .name = "PLANE_DEGAMMA_LUT_SIZE" },
+	[WDRM_PLANE_CTM] = { .name = "PLANE_CTM" },
+	[WDRM_PLANE_GAMMA] = { .name = "PLANE_GAMMA_LUT" },
+	[WDRM_PLANE_GAMMA_LUT_SZ] = { .name = "PLANE_GAMMA_LUT_SIZE" },
 };
 
 /**
@@ -403,6 +413,12 @@ struct drm_plane {
 
 	/* The last state submitted to the kernel for this plane. */
 	struct drm_plane_state *state_cur;
+
+	/* Color correction and HDR status */
+	struct drm_plane_color_state clr_state;
+	uint64_t degamma_blob_size;
+	uint64_t gamma_blob_size;
+	uint64_t csc_blob_size;
 
 	struct wl_list link;
 
@@ -2571,6 +2587,59 @@ connector_add_color_correction(drmModeAtomicReq *req,
 	return 0;
 }
 
+static void
+drm_plane_populate_color_properties(struct drm_plane *plane,
+			const drmModePlane *kplane,
+			const drmModeObjectProperties *props)
+{
+	uint64_t val;
+
+	val = drm_property_get_value(&plane->props[WDRM_PLANE_DEGAMMA_LUT_SZ],
+				         props,
+				         0);
+	if (val)
+		plane->degamma_blob_size = val;
+
+	val = drm_property_get_value(&plane->props[WDRM_PLANE_GAMMA_LUT_SZ],
+				         props,
+				         0);
+	if (val)
+		plane->gamma_blob_size = val;
+
+	val = drm_property_get_value(&plane->props[WDRM_PLANE_CTM],
+				         props,
+				         0);
+	if (val)
+		/* CSC blob size is fixed across industry */
+		plane->csc_blob_size = 9;
+}
+
+static int
+plane_add_color_correction(drmModeAtomicReq *req,
+		struct drm_plane *plane, uint32_t flags)
+{
+
+	int ret = 0;
+	struct drm_plane_color_state *cs = &plane->clr_state;
+
+	if (!cs->changed)
+		return 0;
+
+	ret |= plane_add_prop(req, plane, WDRM_PLANE_DEGAMMA, cs->deg_blob_id);
+	ret |= plane_add_prop(req, plane, WDRM_PLANE_CTM, cs->csc_blob_id);
+	ret |= plane_add_prop(req, plane, WDRM_PLANE_GAMMA, cs->gamma_blob_id);
+	if (ret != 0) {
+		weston_log("Apply plane color correction failed\n");
+		return ret;
+	}
+
+	if (!(flags & DRM_MODE_ATOMIC_TEST_ONLY))
+		cs->changed = false;
+
+	return ret;
+}
+
+
 static int
 drm_output_apply_state_atomic(struct drm_output_state *state,
 			      drmModeAtomicReq *req,
@@ -2647,6 +2716,7 @@ drm_output_apply_state_atomic(struct drm_output_state *state,
 				      plane_state->dest_w);
 		ret |= plane_add_prop(req, plane, WDRM_PLANE_CRTC_H,
 				      plane_state->dest_h);
+		ret |= plane_add_color_correction(req, plane, *flags);
 
 		if (plane_state->fb && plane_state->fb->format)
 			pinfo = plane_state->fb->format;
@@ -4926,6 +4996,8 @@ drm_plane_create(struct drm_backend *b, const drmModePlane *kplane,
 			drmModeFreeObjectProperties(props);
 			goto err;
 		}
+
+		drm_plane_populate_color_properties(plane, kplane, props);
 
 		drmModeFreeObjectProperties(props);
 	}
