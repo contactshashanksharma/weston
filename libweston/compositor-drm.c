@@ -60,7 +60,6 @@
 #include "pixman-renderer.h"
 #include "pixel-formats.h"
 #include "libbacklight.h"
-#include "libinput-seat.h"
 #include "launcher-util.h"
 #include "vaapi-recorder.h"
 #include "presentation-time-server-protocol.h"
@@ -298,105 +297,10 @@ enum drm_state_apply_mode {
 	DRM_STATE_TEST_ONLY, /**< test if the state can be applied */
 };
 
-struct drm_backend {
-	struct weston_backend base;
-	struct weston_compositor *compositor;
-
-	struct udev *udev;
-	struct wl_event_source *drm_source;
-
-	struct udev_monitor *udev_monitor;
-	struct wl_event_source *udev_drm_source;
-
-	struct {
-		int id;
-		int fd;
-		char *filename;
-	} drm;
-	struct gbm_device *gbm;
-	struct wl_listener session_listener;
-	uint32_t gbm_format;
-
-	/* we need these parameters in order to not fail drmModeAddFB2()
-	 * due to out of bounds dimensions, and then mistakenly set
-	 * sprites_are_broken:
-	 */
-	int min_width, max_width;
-	int min_height, max_height;
-
-	struct wl_list plane_list;
-	int sprites_are_broken;
-	int sprites_hidden;
-
-	void *repaint_data;
-
-	bool state_invalid;
-
-	/* CRTC IDs not used by any enabled output. */
-	struct wl_array unused_crtcs;
-
-	int cursors_are_broken;
-
-	bool universal_planes;
-	bool atomic_modeset;
-
-	bool use_pixman;
-	bool use_pixman_shadow;
-
-	struct udev_input input;
-
-	int32_t cursor_width;
-	int32_t cursor_height;
-
-	uint32_t pageflip_timeout;
-
-	bool shutting_down;
-
-	bool aspect_ratio_supported;
-
-	bool fb_modifiers;
-
-	struct weston_debug_scope *debug;
-};
-
 struct drm_mode {
 	struct weston_mode base;
 	drmModeModeInfo mode_info;
 	uint32_t blob_id;
-};
-
-enum drm_fb_type {
-	BUFFER_INVALID = 0, /**< never used */
-	BUFFER_CLIENT, /**< directly sourced from client */
-	BUFFER_DMABUF, /**< imported from linux_dmabuf client */
-	BUFFER_PIXMAN_DUMB, /**< internal Pixman rendering */
-	BUFFER_GBM_SURFACE, /**< internal EGL rendering */
-	BUFFER_CURSOR, /**< internal cursor buffer */
-};
-
-struct drm_fb {
-	enum drm_fb_type type;
-
-	int refcnt;
-
-	uint32_t fb_id, size;
-	uint32_t handles[4];
-	uint32_t strides[4];
-	uint32_t offsets[4];
-	int num_planes;
-	const struct pixel_format_info *format;
-	uint64_t modifier;
-	int width, height;
-	int fd;
-	struct weston_buffer_reference buffer_ref;
-	struct weston_buffer_release_reference buffer_release_ref;
-
-	/* Used by gbm fbs */
-	struct gbm_bo *bo;
-	struct gbm_surface *gbm_surface;
-
-	/* Used by dumb fbs */
-	void *map;
 };
 
 struct drm_edid {
