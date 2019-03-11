@@ -3956,6 +3956,117 @@ drm_prepare_conn_color_state(struct drm_backend *b,
 	return 0;
 }
 
+static struct drm_output_state *
+drm_output_propose_hdr_state(struct weston_output *output_base,
+			     struct drm_pending_state *pending_state,
+			     struct weston_surface *hdr_surface)
+{
+	int ret;
+	int view_count = 0;
+	struct drm_output_state *state;
+	struct drm_plane_state *ps = NULL;
+	struct weston_surface *surface = NULL;
+	struct weston_view *ev;
+	struct drm_output *output = to_drm_output(output_base);
+	struct drm_backend *b = to_drm_backend(output->base.compositor);
+	struct weston_head *w_head = weston_output_get_first_head(&output->base);
+	struct drm_head *head = to_drm_head(w_head);
+	struct drm_conn_color_state *conn_state;
+
+	assert(!output->state_last);
+	state = drm_output_state_duplicate(output->state_cur,
+					   pending_state,
+					   DRM_OUTPUT_STATE_CLEAR_PLANES);
+
+	conn_state = &head->color_state;
+	if (!conn_state->hdr_md_blob_id) {
+		weston_log("HDR state not ready ?\n");
+		goto err;
+	}
+
+	wl_list_for_each(ev, &output_base->compositor->view_list, link) {
+		struct weston_buffer *buffer = NULL;
+
+		surface = ev->surface;
+		if (!surface)
+			continue;
+
+		/* Display engine overlays can handle dma buffers only */
+		buffer = surface->buffer_ref.buffer;
+		if (!buffer || !linux_dmabuf_buffer_get(buffer->resource))
+			continue;
+
+		view_count++;
+		surface->is_opaque = true;
+		ev->alpha = 1.0f;
+
+		/* Find plane for this surface */
+		ps = drm_output_prepare_overlay_view(state, ev,
+			DRM_OUTPUT_PROPOSE_STATE_PLANES_ONLY);
+		if (!ps) {
+			drm_debug(b, "\t\t[view] prepare overlay view failed\n");
+			goto err;
+		}
+	}
+
+	/* Check to see if this state will actually work. */
+	ret = drm_pending_state_test(state->pending_state);
+	if (ret != 0) {
+		drm_debug(b, "\t\t[view] atomic test state faiiled\n");
+		goto err;
+	}
+
+	return state;
+
+err:
+	drm_output_state_free(state);
+	return NULL;
+}
+
+static int
+drm_handle_hdr_view(struct drm_backend *b,
+		struct weston_output *output_base,
+		struct weston_surface *hdr_surf,
+		struct drm_pending_state *pending_state)
+{
+	struct weston_view *ev;
+	struct drm_plane_state *plane_state;
+	struct drm_output_state *state = NULL;
+	struct drm_plane *target_plane = NULL;
+	bool success = false;
+
+	state = drm_output_propose_hdr_state(output_base, pending_state, hdr_surf);
+	if (!state) {
+		drm_debug(b, "\t[repaint] failed to get HDR state\n");
+		return -1;
+	}
+
+	wl_list_for_each(ev, &output_base->compositor->view_list, link) {
+		wl_list_for_each(plane_state, &state->plane_list, link) {
+			if (plane_state->ev == ev) {
+				plane_state->ev = NULL;
+				target_plane = plane_state->plane;
+				break;
+			}
+		}
+
+		if (target_plane) {
+			weston_view_move_to_plane(ev, &target_plane->base);
+			drm_debug(b, "\t[repaint] assign HDR plane success "
+				  "target HDR plane(%d %s)\n", target_plane->plane_id,
+				  plane_type_enums[target_plane->type].name);
+			success = true;
+		}
+	}
+
+	if (success)
+		return 0;
+
+	drm_output_state_free(state);
+	state = NULL;
+	return -1;
+}
+
 
 static inline struct weston_surface *
 drm_view_is_hdr(struct weston_output *output_base)
@@ -4002,6 +4113,15 @@ drm_assign_planes(struct weston_output *output_base, void *repaint_data)
 			goto normal_assign;
 		}
 
+		/* Try to handle the HDR view with display engine overlays */
+		ret = drm_handle_hdr_view(b, output_base, hdr_surface, pending_state);
+		if (ret) {
+			weston_log("Handling HDR view failed\n");
+			state = NULL;
+			mode = DRM_OUTPUT_PROPOSE_STATE_RENDERER_ONLY;
+			goto render_view;
+		}
+
 		return;
 	}
 
@@ -4025,6 +4145,7 @@ normal_assign:
 		drm_debug(b, "\t[state] no overlay plane support\n");
 	}
 
+render_view:
 	if (!state) {
 		mode = DRM_OUTPUT_PROPOSE_STATE_RENDERER_ONLY;
 		state = drm_output_propose_state(output_base, pending_state,
